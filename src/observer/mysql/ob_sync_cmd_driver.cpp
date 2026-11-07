@@ -23,6 +23,8 @@
 #include "observer/mysql/obmp_query.h"
 #include "rpc/obmysql/packet/ompk_row.h"
 #include "sql/engine/expr/ob_expr_sql_udt_utils.h"
+#include "sql/ob_ai_column_helper.h"
+#include "sql/ob_ai_column_helper.h"
 
 namespace oceanbase
 {
@@ -158,6 +160,7 @@ int ObSyncCmdDriver::response_result(ObMySQLResultSet &result)
     if (OB_FAIL(result.close())) {
     } else if (!result.is_with_rows()) {
       process_ok = true;
+      ObAiColumnHelper::on_statement_open_success(result);
       ObOKPParam ok_param;
       ok_param.message_ = const_cast<char*>(result.get_message());
       ok_param.affected_rows_ = result.get_affected_rows();

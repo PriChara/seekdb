@@ -220,7 +220,8 @@ int ObTokenStopWordNormalizer::filter_special_marks(const ObDatum &check_token, 
 
 ObBasicEnglishNormalizer::ObBasicEnglishNormalizer()
   : ObTokenNormalizer(),
-    norm_allocator_("TxtTokGrpFilter", OB_MALLOC_NORMAL_BLOCK_SIZE)
+    norm_allocator_("TxtTokGrpFilter", OB_MALLOC_NORMAL_BLOCK_SIZE),
+    norm_buf_()
 {
 }
 
@@ -244,7 +245,6 @@ int ObBasicEnglishNormalizer::get_next(ObDatum &next_token, int64_t &token_freq)
   } else {
     next_token.reset();
     token_freq = 0;
-    norm_allocator_.reuse();
     ObDatum tmp_datum;
     bool found_alnum = false;
     uint32_t norm_token_len = 0;
@@ -292,7 +292,34 @@ int ObBasicEnglishNormalizer::get_next(ObDatum &next_token, int64_t &token_freq)
     if (OB_FAIL(ret)) {
     } else if (OB_UNLIKELY(!found_alnum)) {
       ret = OB_ERR_UNEXPECTED;
+    } else if (OB_LIKELY(cs_->casedn_multiply == 1 && norm_token_len <= sizeof(norm_buf_))) {
+      bool all_ascii = true;
+      bool has_upper = false;
+      for (uint32_t i = 0; i < norm_token_len; ++i) {
+        const unsigned char c = static_cast<unsigned char>(norm_token_ptr[i]);
+        if (c >= 0x80) {
+          all_ascii = false;
+          break;
+        } else if (c >= 'A' && c <= 'Z') {
+          has_upper = true;
+          norm_buf_[i] = static_cast<char>(c + ('a' - 'A'));
+        } else {
+          norm_buf_[i] = static_cast<char>(c);
+        }
+      }
+      if (all_ascii) {
+        if (!has_upper) {
+          next_token.set_string(norm_token_ptr, norm_token_len);
+        } else {
+          next_token.set_string(norm_buf_, norm_token_len);
+        }
+      } else {
+        MEMCPY(norm_buf_, norm_token_ptr, norm_token_len);
+        size_t len = cs_->cset->casedn(cs_, norm_buf_, norm_token_len, norm_buf_, sizeof(norm_buf_));
+        next_token.set_string(norm_buf_, static_cast<uint32_t>(len));
+      }
     } else {
+      norm_allocator_.reuse();
       ObString norm_alnum_token(norm_token_len, norm_token_ptr);
       ObString norm_lower_token;
       if (OB_FAIL(ObCharset::tolower(cs_, norm_alnum_token, norm_lower_token, norm_allocator_))) {

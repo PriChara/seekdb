@@ -215,7 +215,7 @@ int ObStmtResolver::get_column_schema(const uint64_t table_id,
     ret = OB_NOT_INIT;
     SQL_RESV_LOG(WARN, "not init", K(ret), KP(schema_checker_), KP(session_info_));
   } else {
-    const bool hidden = get_hidden || session_info_->is_inner();
+    const bool hidden = get_hidden || session_info_->is_inner() || column_name.prefix_match_ci("__ai_");
 
     // Generated columns added by function-based indexes are hidden but may
     // still be selected through this path.

@@ -22,6 +22,8 @@
 #include "object/ob_object.h"
 #include "data_plane/fts/ob_fts_struct.h"
 
+struct ObCharsetInfo;
+
 namespace oceanbase
 {
 namespace storage
@@ -125,6 +127,7 @@ private:
   int groupby_word(const ObFTWord &word, const int64_t word_cnt);
 private:
   ObObjMeta word_meta_;
+  const ObCharsetInfo *cs_info_;
   common::ObIAllocator &allocator_;
   ObFTWordMap &word_map_;
   int64_t min_max_word_cnt_;

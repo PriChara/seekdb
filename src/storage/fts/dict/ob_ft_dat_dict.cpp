@@ -260,7 +260,7 @@ int ObFTDATReader<DATA_TYPE>::match_with_hit(const ObString &ft_char,
 
   ObFTSingleWord word;
   word.set_word(ft_char.ptr(), ft_char.length());
-  if (OB_FAIL(dat_->get_map()->find(word, code)) && OB_ENTRY_NOT_EXIST != ret) {
+  if (OB_FAIL(map->find(word, code)) && OB_ENTRY_NOT_EXIST != ret) {
   } else if (OB_ENTRY_NOT_EXIST == ret) {
     ret = OB_SUCCESS;
     hit.set_unmatch();
@@ -302,15 +302,15 @@ ObArrayHashMap *ObFTDAT::get_map() { return reinterpret_cast<ObArrayHashMap *>(b
 int ObArrayHashMap::find(const ObFTSingleWord &word, ObFTWordCode &code) const
 {
   int ret = OB_ENTRY_NOT_EXIST;
-  uint64_t hash = word.get_word().hash();
-  uint64_t index = hash % header_.capacity_;
+  const uint64_t mask = header_.capacity_ - 1;
+  uint64_t index = word.fast_hash() & mask;
   while (header_.data[index].used) {
     if (header_.data[index].word == word) {
       code = header_.data[index].code;
       ret = OB_SUCCESS;
       break;
     } else {
-      index = (index + 3) % header_.capacity_;
+      index = (index + 1) & mask;
     }
   }
   return ret;
@@ -319,14 +319,16 @@ int ObArrayHashMap::find(const ObFTSingleWord &word, ObFTWordCode &code) const
 int ObArrayHashMap::insert(const ObString &key, ObFTWordCode code)
 {
   int ret = OB_SUCCESS;
-  uint64_t hash = key.hash();
-  uint64_t index = hash % header_.capacity_;
+  ObFTSingleWord word;
+  word.set_word(key.ptr(), key.length());
+  const uint64_t mask = header_.capacity_ - 1;
+  uint64_t index = word.fast_hash() & mask;
   while (header_.data[index].used) {
-    index = (index + 3) % header_.capacity_;
+    index = (index + 1) & mask;
   }
 
   header_.data[index].code = code;
-  header_.data[index].word.set_word(key.ptr(), key.length());
+  header_.data[index].word = word;
   header_.data[index].used = true;
   header_.count_++;
   return ret;
@@ -354,8 +356,11 @@ size_t ObArrayHashMap::estimate_size(size_t word_num)
 
 size_t ObArrayHashMap::estimate_capacity(size_t word_num)
 {
-  constexpr size_t MIN_CAPACITY = 101;                   // prime
-  size_t capacity = MAX(word_num * 4 / 3, MIN_CAPACITY); // 75%
+  size_t needed = MAX(word_num * 2, static_cast<size_t>(128));
+  size_t capacity = 128;
+  while (capacity < needed) {
+    capacity <<= 1;
+  }
   return capacity;
 }
 } //  namespace storage

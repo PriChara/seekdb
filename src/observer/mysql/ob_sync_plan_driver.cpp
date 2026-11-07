@@ -21,6 +21,7 @@
 #include "rpc/obmysql/packet/ompk_eof.h"
 #include "observer/mysql/obmp_query.h"
 #include "sql/ob_query_retry_ctrl.h"
+#include "sql/ob_ai_column_helper.h"
 
 namespace oceanbase
 {
@@ -147,6 +148,7 @@ int ObSyncPlanDriver::response_result(ObMySQLResultSet &result)
   } else {
     if (OB_FAIL(result.close())) {
     } else {
+      ObAiColumnHelper::on_statement_open_success(result);
       if (!result.has_implicit_cursor()) {
         //no implicit cursor, send one ok packet to client
         ObOKPParam ok_param;

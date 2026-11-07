@@ -42,15 +42,27 @@ public:
         range_dicts_(&range_alloc_), range_container_(range_container)
   {
   }
-  ~ObFTRangeDict() override{};
+  ~ObFTRangeDict() override { destroy(); }
 
 public:
   struct ObFTRange final
   {
     ObFTSingleWord start_;
     ObFTSingleWord end_;
+    uint32_t start_key_;
+    uint32_t end_key_;
     ObIFTDict *dict_; // a cache dict
   };
+
+  static OB_INLINE uint32_t pack_utf8_char_key(const char *ptr, int32_t len)
+  {
+    uint32_t k = 0;
+    if (len >= 1) k |= static_cast<uint32_t>(static_cast<uint8_t>(ptr[0])) << 24;
+    if (len >= 2) k |= static_cast<uint32_t>(static_cast<uint8_t>(ptr[1])) << 16;
+    if (len >= 3) k |= static_cast<uint32_t>(static_cast<uint8_t>(ptr[2])) << 8;
+    if (len >= 4) k |= static_cast<uint32_t>(static_cast<uint8_t>(ptr[3]));
+    return k;
+  }
 
 public:
   int init() override;

@@ -13949,6 +13949,15 @@ static const _error _error_OB_ERR_SPECIFIED_ROW_NO_LONGER_EXISTS = {
       .str_error             = "specified row no longer exists",
       .str_user_error        = "specified row no longer exists"
 };
+static const _error _error_OB_AI_COLUMN_UNFINISHED_TASK = {
+      .error_name            = "OB_AI_COLUMN_UNFINISHED_TASK",
+      .error_cause           = "Internal Error",
+      .error_solution        = "Contact OceanBase Support",
+      .mysql_errno           = -1,
+      .sqlstate              = "HY000",
+      .str_error             = "AI column has unfinished tasks",
+      .str_user_error        = "AI column has unfinished tasks for table_id=%lu, column_id=%lu"
+};
 
 struct ObStrErrorInit
 {
@@ -15502,6 +15511,7 @@ struct ObStrErrorInit
     _errors[-OB_ERR_SNAPSHOT_QUERY_WITH_UPDATE] = &_error_OB_ERR_SNAPSHOT_QUERY_WITH_UPDATE;
     _errors[-OB_ERR_UPDATE_ON_EXPR] = &_error_OB_ERR_UPDATE_ON_EXPR;
     _errors[-OB_ERR_SPECIFIED_ROW_NO_LONGER_EXISTS] = &_error_OB_ERR_SPECIFIED_ROW_NO_LONGER_EXISTS;
+    _errors[11120] = &_error_OB_AI_COLUMN_UNFINISHED_TASK;
 
   }
 };

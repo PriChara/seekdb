@@ -33,6 +33,8 @@
 #include "sql/rewrite/ob_transform_pre_process.h"
 #include "sql/code_generator/ob_code_generator.h"
 #include "sql/plan_cache/ob_values_table_compression.h"
+#include "sql/ob_file_sql_helper.h"
+#include "sql/ob_ai_column_helper.h"
 #include "sql/pl/ob_pl_resolver.h"
 #include "lib/utility/ob_smart_call.h"
 #include "sql/monitor/show_trace/ob_show_trace.h"
@@ -1944,6 +1946,28 @@ OB_INLINE int ObSql::handle_text_query(const ObString &stmt, ObSqlCtx &context, 
 
   ObIAllocator &allocator = THIS_WORKER.get_sql_arena_allocator();
   ObSQLSessionInfo &session = result.get_session();
+
+  if (OB_SUCC(ret) && ObFileSqlHelper::has_file_sql_keyword(trimed_stmt)) {
+    if (OB_FAIL(ObFileSqlHelper::handle_file_sql(trimed_stmt, session, allocator, result, trimed_stmt))) {
+      result.get_exec_context().set_need_disconnect(false);
+      return ret;
+    }
+  }
+
+  ObAiColumnHelper::ensure_worker_started();
+  if (OB_SUCC(ret)) {
+    if (OB_FAIL(ObAiColumnHelper::check_strict_read(trimed_stmt, session))) {
+      result.get_exec_context().set_need_disconnect(false);
+      return ret;
+    }
+  }
+
+  if (OB_SUCC(ret) && ObAiColumnHelper::has_ai_column_keyword(trimed_stmt)) {
+    if (OB_FAIL(ObAiColumnHelper::handle_ai_column(trimed_stmt, session, allocator, result, trimed_stmt))) {
+      result.get_exec_context().set_need_disconnect(false);
+      return ret;
+    }
+  }
   
   ObExecContext& ectx = result.get_exec_context();
   int get_plan_err = OB_SUCCESS; //used for judge whether add plan to plan cache

@@ -380,26 +380,16 @@ int ObFTRangeDict::match_with_hit(const ObString &single_word,
 
 int ObFTRangeDict::find_first_char_range(const ObString &single_word, ObIFTDict *&dict) const
 {
-  int ret = OB_SUCCESS;
-  bool found = false;
-  for (int i = 0; OB_SUCC(ret) && !found && i < range_dicts_.size(); ++i) {
-    if (ObCharset::strcmp(ObCollationType::CS_TYPE_UTF8MB4_BIN,
-                          range_dicts_[i].start_.get_word(),
-                          single_word)
-            <= 0
-        && ObCharset::strcmp(ObCollationType::CS_TYPE_UTF8MB4_BIN,
-                             range_dicts_[i].end_.get_word(),
-                             single_word)
-               >= 0) {
-      dict = range_dicts_[i].dict_;
-      found = true;
+  const uint32_t key = pack_utf8_char_key(single_word.ptr(), single_word.length());
+  const int32_t n = static_cast<int32_t>(range_dicts_.size());
+  for (int32_t i = 0; i < n; ++i) {
+    const ObFTRange &r = range_dicts_[i];
+    if (key >= r.start_key_ && key <= r.end_key_) {
+      dict = r.dict_;
+      return OB_SUCCESS;
     }
   }
-  if (!found) {
-    // not found, dis match
-    ret = OB_ENTRY_NOT_EXIST;
-  }
-  return ret;
+  return OB_ENTRY_NOT_EXIST;
 }
 
 int ObFTRangeDict::build_dict_from_cache(const ObFTCacheRangeContainer &range_container)
@@ -417,6 +407,8 @@ int ObFTRangeDict::build_dict_from_cache(const ObFTCacheRangeContainer &range_co
       ObFTRange range;
       range.start_ = dat->start_word_;
       range.end_ = dat->end_word_;
+      range.start_key_ = pack_utf8_char_key(range.start_.word, range.start_.word_len);
+      range.end_key_ = pack_utf8_char_key(range.end_.word, range.end_.word_len);
       range.dict_ = dict;
       if (OB_FAIL(range_dicts_.push_back(range))) {
       }

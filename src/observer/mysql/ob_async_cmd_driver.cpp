@@ -20,6 +20,7 @@
 
 #include "query/protocol/ob_mysql_packet_sender.h"
 #include "observer/mysql/obmp_query.h"
+#include "sql/ob_ai_column_helper.h"
 #include "sql/ob_query_retry_ctrl.h"
 
 namespace oceanbase
@@ -92,6 +93,8 @@ int ObAsyncCmdDriver::response_result(ObMySQLResultSet &result)
     }
     int close_ret = OB_SUCCESS;
     if (OB_SUCCESS != (close_ret = result.close())) {
+    } else {
+      ObAiColumnHelper::on_statement_open_success(result);
     }
   }
   return ret;

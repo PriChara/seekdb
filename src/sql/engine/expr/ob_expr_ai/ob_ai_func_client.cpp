@@ -17,10 +17,64 @@
 #define USING_LOG_PREFIX SQL_ENG
 #include "ob_ai_func_client.h"
 
+#include <mutex>
+#include <condition_variable>
+#include <unordered_map>
+
 namespace oceanbase 
 {
 namespace common 
 {
+
+namespace {
+struct EndpointSlotState {
+  std::mutex mtx;
+  std::condition_variable cv;
+  int64_t in_flight = 0;
+};
+
+class ObAIEndpointLimiterGuard {
+public:
+  ObAIEndpointLimiterGuard(uint64_t endpoint_id, int64_t max_concurrency)
+    : state_(nullptr), active_(false)
+  {
+    if (endpoint_id != OB_INVALID_ID && max_concurrency > 0) {
+      int64_t limit = std::min<int64_t>(std::max<int64_t>(1, max_concurrency), 1024);
+      {
+        static std::mutex map_mtx;
+        static std::unordered_map<uint64_t, EndpointSlotState *> states;
+        std::lock_guard<std::mutex> lk(map_mtx);
+        auto it = states.find(endpoint_id);
+        if (it == states.end()) {
+          state_ = new EndpointSlotState();
+          states[endpoint_id] = state_;
+        } else {
+          state_ = it->second;
+        }
+      }
+      if (state_ != nullptr) {
+        std::unique_lock<std::mutex> lk(state_->mtx);
+        state_->cv.wait(lk, [&]() { return state_->in_flight < limit; });
+        state_->in_flight++;
+        active_ = true;
+      }
+    }
+  }
+  ~ObAIEndpointLimiterGuard()
+  {
+    if (active_ && state_ != nullptr) {
+      std::unique_lock<std::mutex> lk(state_->mtx);
+      state_->in_flight--;
+      lk.unlock();
+      state_->cv.notify_one();
+    }
+  }
+private:
+  EndpointSlotState *state_;
+  bool active_;
+};
+}
+
 
 const int64_t ObAIFuncClient::CURL_MAX_TIMEOUT_SEC = INT_MAX/1000;
 ObAIFuncClient::ObAIFuncClient()
@@ -31,6 +85,8 @@ ObAIFuncClient::ObAIFuncClient()
   abs_timeout_ts_ = 0;
   max_retry_times_ = 3;  // default retry 3 times
   timeout_sec_ = 60; // default timeout 1 minute
+  endpoint_id_ = OB_INVALID_ID;
+  max_concurrency_ = 16;
 }
 
 void ObAIFuncClient::reset() 
@@ -77,7 +133,7 @@ int ObAIFuncClient::init(common::ObIAllocator &allocator, const common::ObString
 {
   int ret = OB_SUCCESS;
   int64_t remain_timeout_us = THIS_WORKER.is_timeout_ts_valid() ? THIS_WORKER.get_timeout_remain() : timeout_sec_ * 1000000;
-  if (OB_ISNULL(url) || headers.empty()) {
+  if (OB_ISNULL(url)) {
     ret = OB_INVALID_ARGUMENT;
   } else {
     allocator_ = &allocator;
@@ -130,6 +186,7 @@ int ObAIFuncClient::error_handle(CURLcode res)
 int ObAIFuncClient::send_post(ObJsonObject *data, ObJsonObject *&response) 
 {
   int ret = OB_SUCCESS;
+  ObAIEndpointLimiterGuard limiter_guard(endpoint_id_, max_concurrency_);
   if (OB_ISNULL(data)) {
     ret = OB_INVALID_ARGUMENT;
   } else if (OB_ISNULL(curl_)) {
@@ -212,11 +269,16 @@ int ObAIFuncClient::send_post(common::ObIAllocator &allocator,
 int ObAIFuncClient::send_post_batch(ObArray<ObJsonObject *> &data_array, ObArray<ObJsonObject *> &responses) 
 {
   int ret = OB_SUCCESS;
-  if (data_array.empty() || OB_ISNULL(url_) || OB_ISNULL(header_list_)) {
+  if (curlm_ != nullptr && max_concurrency_ > 0) {
+    curl_multi_setopt(curlm_, CURLMOPT_MAX_TOTAL_CONNECTIONS, static_cast<long>(std::min<int64_t>(std::max<int64_t>(1, max_concurrency_), 1024)));
+  }
+  if (data_array.empty() || OB_ISNULL(url_)) {
     ret = OB_INVALID_ARGUMENT;
   } else if (OB_ISNULL(curlm_)) {
     if (OB_ISNULL(curlm_ = curl_multi_init())) {
       ret = OB_INVALID_ARGUMENT;
+    } else if (max_concurrency_ > 0) {
+      curl_multi_setopt(curlm_, CURLMOPT_MAX_TOTAL_CONNECTIONS, static_cast<long>(std::min<int64_t>(std::max<int64_t>(1, max_concurrency_), 1024)));
     }
   } 
   if (OB_SUCC(ret)) {
@@ -299,11 +361,13 @@ int ObAIFuncClient::send_post_batch(common::ObIAllocator &allocator,
 int ObAIFuncClient::send_post_batch_no_wait(ObArray<ObJsonObject *> &data_array) 
 {
   int ret = OB_SUCCESS;
-  if (data_array.empty() || OB_ISNULL(url_) || OB_ISNULL(header_list_)) {
+  if (data_array.empty() || OB_ISNULL(url_)) {
     ret = OB_INVALID_ARGUMENT;
   } else if (OB_ISNULL(curlm_)) {
     if (OB_ISNULL(curlm_ = curl_multi_init())) {
       ret = OB_INVALID_ARGUMENT;
+    } else if (max_concurrency_ > 0) {
+      curl_multi_setopt(curlm_, CURLMOPT_MAX_TOTAL_CONNECTIONS, static_cast<long>(std::min<int64_t>(std::max<int64_t>(1, max_concurrency_), 1024)));
     }
   } 
   if (OB_SUCC(ret)) {

@@ -82,42 +82,42 @@ int ObExprTokenize::tokenize_fulltext(const TokenizeParam &param,
 {
   int ret = OB_SUCCESS;
   storage::ObFTParseHelper tokenize_helper;
-  const int64_t ft_word_bkt_cnt = MIN(MAX(param.fulltext_.length() / 2, 2), 997);
   int64_t doc_len = 0;
-  storage::ObFTWordMap token_map;
-
-  ObArenaAllocator tmp_parse_alloc(ObMemAttr("Tmp buffer"));
+  thread_local storage::ObFTWordMap tl_token_map;
 
   if (TokenizeParam::OUTPUT_MODE::DEFAULT != mode && TokenizeParam::OUTPUT_MODE::ALL != mode) {
     ret = OB_INVALID_ARGUMENT;
   } else if (OB_FAIL(tokenize_helper.init(&allocator, param.parser_name_, param.properties_))) {
-  } else if (OB_FAIL(token_map.create(ft_word_bkt_cnt, common::ObMemAttr("FTWordMap")))) {
-  } else if (
-      (0 != param.fulltext_.length())
-      && OB_FAIL(tokenize_helper.segment(
-                     param.meta_,
-                     param.fulltext_.ptr(),
-                     param.fulltext_.length(),
-                     doc_len,
-                     token_map))) {
+  } else if (OB_UNLIKELY(!tl_token_map.created())
+             && OB_FAIL(tl_token_map.create(997, common::ObMemAttr("FTWordMap")))) {
   } else {
-    switch (param.output_mode_) {
-    case TokenizeParam::OUTPUT_MODE::DEFAULT: {
-      if (OB_FAIL(tokenize_helper.make_token_array_json(token_map, result))) {
-      } else {
-        // pass
+    tl_token_map.reuse();
+    if ((0 != param.fulltext_.length())
+        && OB_FAIL(tokenize_helper.segment(
+                       param.meta_,
+                       param.fulltext_.ptr(),
+                       param.fulltext_.length(),
+                       doc_len,
+                       tl_token_map))) {
+    } else {
+      switch (param.output_mode_) {
+      case TokenizeParam::OUTPUT_MODE::DEFAULT: {
+        if (OB_FAIL(tokenize_helper.make_token_array_json(tl_token_map, result))) {
+        } else {
+          // pass
+        }
+        break;
       }
-      break;
-    }
-    case TokenizeParam::OUTPUT_MODE::ALL: {
-      if (OB_FAIL(tokenize_helper.make_detail_json(token_map, doc_len, result))) {
-      } else {
-        // pass
+      case TokenizeParam::OUTPUT_MODE::ALL: {
+        if (OB_FAIL(tokenize_helper.make_detail_json(tl_token_map, doc_len, result))) {
+        } else {
+          // pass
+        }
+        break;
       }
-      break;
-    }
-    default:
-      ret = OB_INVALID_ARGUMENT;
+      default:
+        ret = OB_INVALID_ARGUMENT;
+      }
     }
   }
   return ret;
@@ -200,20 +200,118 @@ int ObExprTokenize::parse_param(const ObExpr &expr,
 {
   int ret = OB_SUCCESS;
 
-  ObDatum *parser_params_datum;
-  ObString raw_parser_name = ObString::make_string(OB_DEFAULT_FULLTEXT_PARSER_NAME);
-
-  ObEvalCtx::TempAllocGuard tmp_alloc_g(ctx);
-  
-  MultimodeAlloctor temp_allocator(tmp_alloc_g.get_allocator());
-
   if (OB_UNLIKELY(expr.arg_cnt_ < 1 || expr.arg_cnt_ > 3)) {
     ret = OB_INVALID_ARGUMENT;
   } else if (OB_FAIL(parse_fulltext(expr, ctx, param))) {
-  } else if (OB_FAIL(parse_parser_name(expr, ctx, param))) {
-  } else if (OB_FAIL(parse_parser_properties(expr, ctx, temp_allocator, param))) {
-  } else if (OB_FAIL(param.reform_parser_properties(param.properties_))) {
-  } else if (OB_FAIL(param.try_load_dictionary_for_ik())) {
+  } else {
+    struct CachedTokenizeArgs
+    {
+      bool valid = false;
+      uint32_t arg_cnt = 0;
+      bool arg1_null = true;
+      bool arg2_null = true;
+      ObCollationType coll_type = CS_TYPE_INVALID;
+      char arg1_buf[64] = {0};
+      int32_t arg1_len = 0;
+      char arg2_buf[512] = {0};
+      int32_t arg2_len = 0;
+      char parser_name_buf[storage::OB_FT_PARSER_NAME_LENGTH] = {0};
+      int32_t parser_name_len = 0;
+      char props_buf[512] = {0};
+      int32_t props_len = 0;
+      TokenizeParam::OUTPUT_MODE output_mode = TokenizeParam::OUTPUT_MODE::DEFAULT;
+    };
+    thread_local CachedTokenizeArgs tl_cache;
+
+    ObDatum *d1 = nullptr;
+    ObDatum *d2 = nullptr;
+    bool can_use_cache = true;
+    if (expr.arg_cnt_ >= 2) {
+      if (OB_FAIL(expr.args_[1]->eval(ctx, d1))) {
+        can_use_cache = false;
+      } else if (!d1->is_null() && d1->len_ > static_cast<uint32_t>(sizeof(tl_cache.arg1_buf))) {
+        can_use_cache = false;
+      }
+    }
+    if (OB_SUCC(ret) && can_use_cache && expr.arg_cnt_ >= 3) {
+      if (OB_FAIL(expr.args_[2]->eval(ctx, d2))) {
+        can_use_cache = false;
+      } else if (!d2->is_null() && d2->len_ > static_cast<uint32_t>(sizeof(tl_cache.arg2_buf))) {
+        can_use_cache = false;
+      }
+    }
+
+    if (OB_SUCC(ret) && can_use_cache && tl_cache.valid
+        && tl_cache.arg_cnt == expr.arg_cnt_
+        && tl_cache.coll_type == param.meta_.get_collation_type()) {
+      bool match = true;
+      if (expr.arg_cnt_ >= 2) {
+        if (d1->is_null() != tl_cache.arg1_null) {
+          match = false;
+        } else if (!d1->is_null() && (static_cast<int32_t>(d1->len_) != tl_cache.arg1_len
+                   || 0 != MEMCMP(d1->ptr_, tl_cache.arg1_buf, tl_cache.arg1_len))) {
+          match = false;
+        }
+      }
+      if (match && expr.arg_cnt_ >= 3) {
+        if (d2->is_null() != tl_cache.arg2_null) {
+          match = false;
+        } else if (!d2->is_null() && (static_cast<int32_t>(d2->len_) != tl_cache.arg2_len
+                   || 0 != MEMCMP(d2->ptr_, tl_cache.arg2_buf, tl_cache.arg2_len))) {
+          match = false;
+        }
+      }
+      if (match) {
+        param.parser_name_ = ObString(tl_cache.parser_name_len, tl_cache.parser_name_buf);
+        param.properties_ = ObString(tl_cache.props_len, tl_cache.props_buf);
+        param.output_mode_ = tl_cache.output_mode;
+        return OB_SUCCESS;
+      }
+    }
+
+    if (OB_SUCC(ret)) {
+      ObEvalCtx::TempAllocGuard tmp_alloc_g(ctx);
+      MultimodeAlloctor temp_allocator(tmp_alloc_g.get_allocator());
+      if (OB_FAIL(parse_parser_name(expr, ctx, param))) {
+      } else if (OB_FAIL(parse_parser_properties(expr, ctx, temp_allocator, param))) {
+      } else if (OB_FAIL(param.reform_parser_properties(param.properties_))) {
+      } else if (OB_FAIL(param.try_load_dictionary_for_ik())) {
+      } else if (can_use_cache
+                 && param.parser_name_.length() < static_cast<int32_t>(sizeof(tl_cache.parser_name_buf))
+                 && param.properties_.length() <= static_cast<int32_t>(sizeof(tl_cache.props_buf))) {
+        tl_cache.arg_cnt = expr.arg_cnt_;
+        tl_cache.coll_type = param.meta_.get_collation_type();
+        if (expr.arg_cnt_ >= 2) {
+          tl_cache.arg1_null = d1->is_null();
+          tl_cache.arg1_len = d1->is_null() ? 0 : static_cast<int32_t>(d1->len_);
+          if (!d1->is_null() && tl_cache.arg1_len > 0) {
+            MEMCPY(tl_cache.arg1_buf, d1->ptr_, tl_cache.arg1_len);
+          }
+        } else {
+          tl_cache.arg1_null = true;
+          tl_cache.arg1_len = 0;
+        }
+        if (expr.arg_cnt_ >= 3) {
+          tl_cache.arg2_null = d2->is_null();
+          tl_cache.arg2_len = d2->is_null() ? 0 : static_cast<int32_t>(d2->len_);
+          if (!d2->is_null() && tl_cache.arg2_len > 0) {
+            MEMCPY(tl_cache.arg2_buf, d2->ptr_, tl_cache.arg2_len);
+          }
+        } else {
+          tl_cache.arg2_null = true;
+          tl_cache.arg2_len = 0;
+        }
+        tl_cache.parser_name_len = param.parser_name_.length();
+        MEMCPY(tl_cache.parser_name_buf, param.parser_name_.ptr(), tl_cache.parser_name_len);
+        tl_cache.parser_name_buf[tl_cache.parser_name_len] = '\0';
+        tl_cache.props_len = param.properties_.length();
+        if (tl_cache.props_len > 0) {
+          MEMCPY(tl_cache.props_buf, param.properties_.ptr(), tl_cache.props_len);
+        }
+        tl_cache.output_mode = param.output_mode_;
+        tl_cache.valid = true;
+      }
+    }
   }
   return ret;
 }

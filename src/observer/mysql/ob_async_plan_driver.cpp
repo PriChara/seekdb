@@ -21,6 +21,7 @@
 #include "query/protocol/ob_mysql_packet_sender.h"
 #include "observer/mysql/obmp_query.h"
 #include "sql/ob_query_retry_ctrl.h"
+#include "sql/ob_ai_column_helper.h"
 
 namespace oceanbase
 {
@@ -85,6 +86,7 @@ int ObAsyncPlanDriver::response_result(ObMySQLResultSet &result)
     LOG_ERROR("SELECT should not use async method. wrong code!!!", K(ret));
   } else if (OB_FAIL(result.close())) {
   } else {
+    ObAiColumnHelper::on_statement_open_success(result);
   }
   // Only set after end_trans is executed (regardless of success or failure), meaning a callback will definitely occur
   // The reason for designing this value is that open/close might "fall short" and never actually reach the end

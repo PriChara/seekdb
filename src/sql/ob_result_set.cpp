@@ -27,6 +27,7 @@
 #include "sql/monitor/show_trace/ob_show_trace.h"
 #include "sql/engine/table/ob_table_scan_op.h"
 #include "share/ob_ddl_checksum.h"
+#include "sql/ob_ai_column_helper.h"
 
 using namespace oceanbase::sql;
 using namespace oceanbase::common;

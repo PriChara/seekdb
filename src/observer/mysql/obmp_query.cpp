@@ -21,6 +21,7 @@
 #include "lib/stat/ob_diagnostic_info_guard.h"
 #include "observer/mysql/obmp_query.h"
 #include "sql/engine/ob_physical_plan.h"
+#include "sql/ob_ai_column_helper.h"
 
 #include "observer/mysql/ob_sync_plan_driver.h"
 #include "observer/mysql/ob_sync_cmd_driver.h"
@@ -1181,7 +1182,10 @@ OB_INLINE int ObMPQuery::response_result(ObMySQLResultSet &result,
   // table data can deadlock with the clog callback, so use a synchronous method.
   ObSQLSessionInfo &session = result.get_session();
   sql::ObTraceSpanGuard exec_span(&session, sql::TRACE_SQL_EXECUTE);
-  bool need_trans_cb  = result.need_end_trans_callback() && (!force_sync_resp);
+  // AI DML persists task rows after close(). A new synchronous inner transaction
+  // must not wait behind the outer transaction's asynchronous clog callback.
+  bool need_trans_cb = result.need_end_trans_callback() && !force_sync_resp
+      && !ObAiColumnHelper::needs_sync_response(result);
   // Determine whether it is plan or cmd by checking if plan is null
   // Handle plan and cmd separately, the logic will be clearer.
   if (OB_LIKELY(NULL != result.get_physical_plan())) {

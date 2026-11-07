@@ -20,6 +20,7 @@
 #include "lib/charset/ob_charset.h"
 
 #include <cstdint>
+#include <cstring>
 
 namespace oceanbase
 {
@@ -36,13 +37,47 @@ typedef uint32_t ObFTWordStateIndex;
 struct ObFTSingleWord
 {
 public:
-  ObFTSingleWord() : word(""), word_len(0) {}
+  ObFTSingleWord() : word{0, 0, 0, 0}, word_len(0) {}
   ObFTSingleWord(const ObFTSingleWord &other) = default;
   ObFTSingleWord &operator=(const ObFTSingleWord &other) = default;
 
-  int32_t set_word(const char *word, int32_t word_len);
-  ObString get_word() const;
-  bool operator==(const ObFTSingleWord &other) const;
+  OB_INLINE int32_t set_word(const char *w, int32_t w_len)
+  {
+    int ret = common::OB_SUCCESS;
+    if (OB_ISNULL(w)) {
+      ret = common::OB_INVALID_ARGUMENT;
+    } else if (OB_UNLIKELY(w_len > common::ObCharset::MAX_MB_LEN || w_len < 0)) {
+      ret = common::OB_SIZE_OVERFLOW;
+    } else {
+      word[0] = 0;
+      word[1] = 0;
+      word[2] = 0;
+      word[3] = 0;
+      for (int32_t i = 0; i < w_len; ++i) {
+        word[i] = w[i];
+      }
+      word_len = static_cast<uint8_t>(w_len);
+    }
+    return ret;
+  }
+
+  OB_INLINE common::ObString get_word() const { return common::ObString(word_len, word); }
+
+  OB_INLINE bool operator==(const ObFTSingleWord &other) const
+  {
+    return word_len == other.word_len && 0 == std::memcmp(word, other.word, word_len);
+  }
+
+  OB_INLINE uint64_t fast_hash() const
+  {
+    uint32_t v = 0;
+    std::memcpy(&v, word, sizeof(v));
+    uint64_t h = (static_cast<uint64_t>(v) << 8) | static_cast<uint64_t>(word_len);
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdULL;
+    h ^= h >> 33;
+    return h;
+  }
 
 public:
   char word[common::ObCharset::MAX_MB_LEN];
