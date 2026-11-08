@@ -15,6 +15,7 @@
  */
 
 #include "ob_ddl_task_executor.h"
+#include "config_bridge.h"
 #include "lib/ob_running_mode.h"
 #include "lib/thread/ob_thread_name.h"
 #include "lib/stat/ob_diagnostic_info_guard.h"
@@ -350,7 +351,12 @@ int ObDDLLocalBuilder::push_task(ObAsyncTask &task)
 
 int64_t ObDDLLocalBuilder::get_thread_cnt_() const
 {
-  return lib::is_mini_mode() ? 1 : 16;
+  // Fulltext auxiliary tables are independent build jobs. Keep their worker
+  // count bounded in mini mode, but allow the two scans to overlap when the
+  // server has enough CPU instead of serializing the whole index build.
+  const int64_t configured_cpu_count = config::cpu_count();
+  const int64_t cpu_count = configured_cpu_count > 0 ? configured_cpu_count : common::get_cpu_num();
+  return lib::is_mini_mode() ? (cpu_count >= 2 ? 2 : 1) : 16;
 }
 
 }  // end namespace share

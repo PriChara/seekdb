@@ -38,6 +38,32 @@ namespace oceanbase
 {
 namespace rootserver
 {
+namespace
+{
+struct FtsChildTaskSnapshot
+{
+  uint64_t key_;
+  ObDomainDependTaskStatus status_;
+};
+
+int snapshot_fts_child_tasks(
+    common::TCRWLock &lock,
+    const common::hash::ObHashMap<uint64_t, ObDomainDependTaskStatus> &tasks,
+    common::ObIArray<FtsChildTaskSnapshot> &snapshot)
+{
+  int ret = OB_SUCCESS;
+  // Hash-map overwrites replace and free nodes. Copy under the same lock as
+  // completion callbacks, then release it before issuing any inner SQL.
+  common::TCRLockGuard guard(lock);
+  for (auto iter = tasks.begin(); OB_SUCC(ret) && iter != tasks.end(); ++iter) {
+    FtsChildTaskSnapshot child{iter->first, iter->second};
+    if (OB_FAIL(snapshot.push_back(child))) {
+    }
+  }
+  return ret;
+}
+} // namespace
+
 /***************         ObFtsIndexBuildTask        *************/
 
 ObFtsIndexBuildTask::ObFtsIndexBuildTask()
@@ -820,7 +846,6 @@ int ObFtsIndexBuildTask::get_charset_type(ObCharsetType &charset_type)
 // wait data complement of aux index tables
 int ObFtsIndexBuildTask::wait_aux_table_complement()
 {
-  using task_iter = common::hash::ObHashMap<uint64_t, rootserver::ObDomainDependTaskStatus>::const_iterator;
   int ret = OB_SUCCESS;
   bool child_task_failed = false;
   bool state_finished = false;
@@ -831,12 +856,15 @@ int ObFtsIndexBuildTask::wait_aux_table_complement()
     ret = OB_STATE_NOT_MATCH;
   } else {
     int64_t finished_task_cnt = 0;
-    for (task_iter iter = dependent_task_result_map_.begin();
-        OB_SUCC(ret) && iter != dependent_task_result_map_.end(); ++iter) {
-      const uint64_t task_key = iter->first;
+    common::ObSEArray<FtsChildTaskSnapshot, 4> children;
+    if (OB_FAIL(snapshot_fts_child_tasks(lock_, dependent_task_result_map_, children))) {
+    }
+    for (int64_t i = 0; OB_SUCC(ret) && i < children.count(); ++i) {
+      const uint64_t task_key = children.at(i).key_;
       const int64_t target_object_id = -1;
-      const int64_t child_task_id = iter->second.task_id_;
-      if (iter->second.ret_code_ == INT64_MAX) {
+      const ObDomainDependTaskStatus &status = children.at(i).status_;
+      const int64_t child_task_id = status.task_id_;
+      if (status.ret_code_ == INT64_MAX) {
         // maybe ddl already finish when switching rs
         HEAP_VAR(ObDDLErrorMessageTableOperator::ObBuildDDLErrorMessage, error_message) {
           int64_t unused_user_msg_len = 0;
@@ -866,14 +894,14 @@ int ObFtsIndexBuildTask::wait_aux_table_complement()
         }
       } else {
         finished_task_cnt++;
-        if (iter->second.ret_code_ != OB_SUCCESS) {
-          ret = iter->second.ret_code_;
+        if (status.ret_code_ != OB_SUCCESS) {
+          ret = status.ret_code_;
           child_task_failed = true;
           state_finished = true;
         }
       }
     }
-    if (finished_task_cnt == dependent_task_result_map_.size() || OB_FAIL(ret)) {
+    if (finished_task_cnt == children.count() || OB_FAIL(ret)) {
       // 1. all child tasks finish.
       // 2. the parent task exits if any child task fails.
       state_finished = true;
@@ -1400,7 +1428,6 @@ int ObFtsIndexBuildTask::get_task_status()
 
 int ObFtsIndexBuildTask::clean_on_failed()
 {
-  using task_iter = common::hash::ObHashMap<uint64_t, rootserver::ObDomainDependTaskStatus>::const_iterator;
   int ret = OB_SUCCESS;
   bool state_finished = false;
   if (OB_UNLIKELY(!is_inited_)) {
@@ -1410,12 +1437,15 @@ int ObFtsIndexBuildTask::clean_on_failed()
   } else {
     // 1. cancel ongoing build index task
     int64_t not_finished_cnt = 0;
-    for (task_iter iter = dependent_task_result_map_.begin();
-        OB_SUCC(ret) && iter != dependent_task_result_map_.end(); ++iter) {
-      const uint64_t task_key = iter->first;
+    common::ObSEArray<FtsChildTaskSnapshot, 4> children;
+    if (OB_FAIL(snapshot_fts_child_tasks(lock_, dependent_task_result_map_, children))) {
+    }
+    for (int64_t i = 0; OB_SUCC(ret) && i < children.count(); ++i) {
+      const uint64_t task_key = children.at(i).key_;
       const int64_t target_object_id = -1;
-      const int64_t child_task_id = iter->second.task_id_;
-      if (iter->second.ret_code_ == INT64_MAX) {
+      const ObDomainDependTaskStatus &status = children.at(i).status_;
+      const int64_t child_task_id = status.task_id_;
+      if (status.ret_code_ == INT64_MAX) {
         // maybe ddl already finish when switching rs
         HEAP_VAR(ObDDLErrorMessageTableOperator::ObBuildDDLErrorMessage, error_message) {
           int64_t unused_user_msg_len = 0;
@@ -1443,7 +1473,7 @@ int ObFtsIndexBuildTask::clean_on_failed()
                   ret = (OB_SUCCESS == ret) ? tmp_ret : ret;
                 }
                 LOG_INFO("cancel not finished ddl task",
-                    K(task_key), K(child_task_id), K(target_object_id), K(dependent_task_result_map_.size()));
+                    K(task_key), K(child_task_id), K(target_object_id), K(children.count()));
               }
             } else {
             }

@@ -39,3 +39,10 @@ ids
 1,2,3,8
 ids
 1,2,7,8
+# Projection and filtering cross the 256-row batch boundary
+hits	id_sum
+258	66691
+hits	id_sum
+257	66690
+hits	varied_scores	positive_sum
+258	1	1

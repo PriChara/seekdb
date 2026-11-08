@@ -61,5 +61,21 @@ SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM perf_match_semantics
 ROLLBACK;
 SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM perf_match_semantics
   WHERE MATCH(body) AGAINST('alpha beta');
+--echo # Projection and filtering cross the 256-row batch boundary
+CREATE TABLE perf_match_batches(id INT PRIMARY KEY, body TEXT,
+  FULLTEXT INDEX ft(body) WITH PARSER beng);
+INSERT INTO perf_match_batches
+  SELECT (a.id-1)*64+(b.id-1)*8+c.id,a.body
+  FROM perf_match_semantics a,perf_match_semantics b,perf_match_semantics c;
+INSERT INTO perf_match_batches VALUES(513,'alpha'),(514,'alpha beta');
+SELECT COUNT(*) AS hits,SUM(id) AS id_sum FROM perf_match_batches
+  WHERE MATCH(body) AGAINST('alpha beta');
+SELECT COUNT(*) AS hits,SUM(id) AS id_sum FROM
+  (SELECT id FROM perf_match_batches WHERE MATCH(body) AGAINST('alpha beta')
+   ORDER BY id LIMIT 257 OFFSET 1) t;
+SELECT COUNT(*) AS hits,MAX(score)>MIN(score) AS varied_scores,SUM(score)>0 AS positive_sum
+  FROM (SELECT MATCH(body) AGAINST('alpha beta') AS score FROM perf_match_batches
+        WHERE MATCH(body) AGAINST('alpha beta')) t;
+DROP TABLE perf_match_batches;
 DROP TABLE perf_match_semantics;
 --enable_query_log

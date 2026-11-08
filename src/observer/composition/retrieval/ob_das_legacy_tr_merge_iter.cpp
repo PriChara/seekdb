@@ -382,6 +382,16 @@ int ObDASLegacyTRMergeIter::create_sparse_retrieval_iter()
   sr_iter_param_.relevance_expr_ = ir_ctdef_->relevance_expr_;
   sr_iter_param_.relevance_proj_expr_ = ir_ctdef_->relevance_proj_col_;
   sr_iter_param_.filter_expr_ = ir_ctdef_->match_filter_;
+  // A score-free natural-language posting is already a positive match. Avoid
+  // evaluating its direct BOOL(MATCH) filter for every emitted document; keep
+  // all other filter shapes and every scored/functional lookup unchanged.
+  const ObExpr *match_filter = sr_iter_param_.filter_expr_;
+  if (!ir_ctdef_->need_calc_relevance() && !function_lookup_mode_
+      && ir_ctdef_->mode_flag_ == NATURAL_LANGUAGE_MODE && match_filter != nullptr
+      && match_filter->type_ == T_OP_BOOL && match_filter->arg_cnt_ == 1
+      && match_filter->args_[0] == sr_iter_param_.relevance_proj_expr_) {
+    sr_iter_param_.filter_expr_ = nullptr;
+  }
   sr_iter_param_.topk_limit_ = topk_limit_;
   if (OB_NOT_NULL(ir_ctdef_->field_boost_expr_)) {
     ObDatum *boost_datum = nullptr;
