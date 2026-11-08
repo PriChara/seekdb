@@ -28,17 +28,13 @@ namespace storage
 int ObFTWord::hash(uint64_t &hash_val) const
 {
   int ret = OB_SUCCESS;
-  if (OB_LIKELY(meta_.get_type() == common::ObVarcharType && !word_.is_null())) {
-    hash_val = common::ObCharset::hash(meta_.get_collation_type(), word_.ptr_, word_.len_, 0, false, ObDefaultHash::hash);
+  common::ObDatumBasicFuncs *funcs = ObDatumFuncs::get_basic_func(meta_.get_type(), meta_.get_collation_type());
+  if (OB_ISNULL(funcs)) {
+    ret = OB_ERR_UNEXPECTED;
+  } else if (funcs->default_hash_ == nullptr) {
+    ret = OB_ERR_UNEXPECTED;
   } else {
-    common::ObDatumBasicFuncs *funcs = ObDatumFuncs::get_basic_func(meta_.get_type(), meta_.get_collation_type());
-    if (OB_ISNULL(funcs)) {
-      ret = OB_ERR_UNEXPECTED;
-    } else if (funcs->default_hash_ == nullptr) {
-      ret = OB_ERR_UNEXPECTED;
-    } else {
-      ret = funcs->default_hash_(word_, 0, hash_val, nullptr);
-    }
+    ret = funcs->default_hash_(word_, 0, hash_val, nullptr);
   }
   return ret;
 }

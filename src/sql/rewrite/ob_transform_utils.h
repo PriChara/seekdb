@@ -196,6 +196,13 @@ public:
     ObSEArray<ObRawExpr*, 4> join_conditions_;
     TableItem *right_table_;
   };
+  // Determine whether any use observes the numeric MATCH score rather than
+  // just its positive/non-positive truth value.
+  static int check_need_calc_match_score(ObExecContext *exec_ctx,
+                                        const ObDMLStmt *stmt,
+                                        ObMatchFunRawExpr *match_expr,
+                                        bool &need_calc,
+                                        ObIArray<ObExprConstraint> &constraints);
 
   static int decorrelate(ObRawExpr *&expr, ObIArray<ObExecParamRawExpr *> &exec_params);
 

@@ -1,0 +1,41 @@
+# Positive existence and numeric thresholds
+ids
+1,2,7,8
+ids
+1,2,7,8
+ids
+1,7
+ids
+3,4,5,6
+# Numeric projection, aggregation and ordering retain BM25
+id	above_one
+1	1
+2	0
+7	1
+8	0
+sum_has_scores	distinct_scores
+1	5
+id
+1
+7
+# A cached zero threshold must not specialize nonzero bindings
+ids
+1,2,7,8
+ids
+1,7
+ids
+NULL
+ids
+1,2,7,8
+# More than 256 distinct query terms exercises the TAAT existence path
+ids
+1,2,7,8
+# Boolean mode, empty terms and transaction visibility
+ids
+1,7
+ids
+NULL
+ids
+1,2,3,8
+ids
+1,2,7,8

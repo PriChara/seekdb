@@ -1,0 +1,65 @@
+# owner: database-competition
+# owner group: SQL
+# description: Preserve MATCH score observers while eliding unobserved BM25 work.
+--disable_query_log
+--disable_warnings
+DROP TABLE IF EXISTS perf_match_semantics;
+--enable_warnings
+CREATE TABLE perf_match_semantics(id INT PRIMARY KEY, body TEXT,
+  FULLTEXT INDEX ft(body) WITH PARSER beng);
+INSERT INTO perf_match_semantics VALUES
+  (1,'alpha beta alpha'),(2,'beta gamma'),(3,'gamma delta'),(4,''),
+  (5,NULL),(6,'the about where'),(7,'alpha'),(8,'delta gamma beta');
+
+--echo # Positive existence and numeric thresholds
+SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM perf_match_semantics
+  WHERE MATCH(body) AGAINST('alpha beta');
+SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM perf_match_semantics
+  WHERE 0 < MATCH(body) AGAINST('alpha beta');
+SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM perf_match_semantics
+  WHERE MATCH(body) AGAINST('alpha beta') > 1;
+SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM perf_match_semantics
+  WHERE MATCH(body) AGAINST('alpha beta') = 0;
+
+--echo # Numeric projection, aggregation and ordering retain BM25
+SELECT id, (MATCH(body) AGAINST('alpha beta') + 0.25 > 1.25) AS above_one
+  FROM perf_match_semantics WHERE MATCH(body) AGAINST('alpha beta') ORDER BY id;
+SELECT ROUND(SUM(MATCH(body) AGAINST('alpha beta'))) > 4 AS sum_has_scores,
+  COUNT(DISTINCT ROUND(MATCH(body) AGAINST('alpha beta'),2)) AS distinct_scores
+  FROM perf_match_semantics;
+SELECT id FROM perf_match_semantics WHERE MATCH(body) AGAINST('alpha beta')
+  ORDER BY MATCH(body) AGAINST('alpha beta') DESC,id LIMIT 2;
+
+--echo # A cached zero threshold must not specialize nonzero bindings
+PREPARE bound_score FROM 'SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM perf_match_semantics WHERE MATCH(body) AGAINST(?)>?';
+SET @terms='alpha beta', @threshold=0;
+EXECUTE bound_score USING @terms,@threshold;
+SET @threshold=1;
+EXECUTE bound_score USING @terms,@threshold;
+SET @threshold=100;
+EXECUTE bound_score USING @terms,@threshold;
+SET @threshold=0;
+EXECUTE bound_score USING @terms,@threshold;
+DEALLOCATE PREPARE bound_score;
+
+--echo # More than 256 distinct query terms exercises the TAAT existence path
+PREPARE wide_score FROM 'SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM perf_match_semantics WHERE MATCH(body) AGAINST(?)';
+SET @terms='alpha beta qxaax qxabx qxacx qxadx qxaex qxafx qxagx qxahx qxaix qxajx qxakx qxalx qxamx qxanx qxaox qxapx qxaqx qxarx qxasx qxatx qxaux qxavx qxawx qxaxx qxayx qxazx qxbax qxbbx qxbcx qxbdx qxbex qxbfx qxbgx qxbhx qxbix qxbjx qxbkx qxblx qxbmx qxbnx qxbox qxbpx qxbqx qxbrx qxbsx qxbtx qxbux qxbvx qxbwx qxbxx qxbyx qxbzx qxcax qxcbx qxccx qxcdx qxcex qxcfx qxcgx qxchx qxcix qxcjx qxckx qxclx qxcmx qxcnx qxcox qxcpx qxcqx qxcrx qxcsx qxctx qxcux qxcvx qxcwx qxcxx qxcyx qxczx qxdax qxdbx qxdcx qxddx qxdex qxdfx qxdgx qxdhx qxdix qxdjx qxdkx qxdlx qxdmx qxdnx qxdox qxdpx qxdqx qxdrx qxdsx qxdtx qxdux qxdvx qxdwx qxdxx qxdyx qxdzx qxeax qxebx qxecx qxedx qxeex qxefx qxegx qxehx qxeix qxejx qxekx qxelx qxemx qxenx qxeox qxepx qxeqx qxerx qxesx qxetx qxeux qxevx qxewx qxexx qxeyx qxezx qxfax qxfbx qxfcx qxfdx qxfex qxffx qxfgx qxfhx qxfix qxfjx qxfkx qxflx qxfmx qxfnx qxfox qxfpx qxfqx qxfrx qxfsx qxftx qxfux qxfvx qxfwx qxfxx qxfyx qxfzx qxgax qxgbx qxgcx qxgdx qxgex qxgfx qxggx qxghx qxgix qxgjx qxgkx qxglx qxgmx qxgnx qxgox qxgpx qxgqx qxgrx qxgsx qxgtx qxgux qxgvx qxgwx qxgxx qxgyx qxgzx qxhax qxhbx qxhcx qxhdx qxhex qxhfx qxhgx qxhhx qxhix qxhjx qxhkx qxhlx qxhmx qxhnx qxhox qxhpx qxhqx qxhrx qxhsx qxhtx qxhux qxhvx qxhwx qxhxx qxhyx qxhzx qxiax qxibx qxicx qxidx qxiex qxifx qxigx qxihx qxiix qxijx qxikx qxilx qximx qxinx qxiox qxipx qxiqx qxirx qxisx qxitx qxiux qxivx qxiwx qxixx qxiyx qxizx qxjax qxjbx qxjcx qxjdx qxjex qxjfx qxjgx qxjhx qxjix qxjjx qxjkx qxjlx qxjmx qxjnx qxjox qxjpx qxjqx qxjrx qxjsx qxjtx qxjux qxjvx qxjwx qxjxx qxjyx qxjzx qxkax qxkbx qxkcx qxkdx qxkex qxkfx qxkgx qxkhx qxkix qxkjx qxkkx qxklx qxkmx qxknx qxkox qxkpx qxkqx qxkrx qxksx qxktx qxkux qxkvx qxkwx qxkxx qxkyx qxkzx qxlax qxlbx qxlcx qxldx qxlex qxlfx qxlgx qxlhx qxlix qxljx qxlkx qxllx qxlmx qxlnx';
+EXECUTE wide_score USING @terms;
+DEALLOCATE PREPARE wide_score;
+
+--echo # Boolean mode, empty terms and transaction visibility
+SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM perf_match_semantics
+  WHERE MATCH(body) AGAINST('+alpha -gamma' IN BOOLEAN MODE);
+SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM perf_match_semantics
+  WHERE MATCH(body) AGAINST('');
+START TRANSACTION;
+UPDATE perf_match_semantics SET body='alpha epsilon' WHERE id=3;
+DELETE FROM perf_match_semantics WHERE id=7;
+SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM perf_match_semantics
+  WHERE MATCH(body) AGAINST('alpha beta');
+ROLLBACK;
+SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM perf_match_semantics
+  WHERE MATCH(body) AGAINST('alpha beta');
+DROP TABLE perf_match_semantics;
+--enable_query_log

@@ -12037,6 +12037,18 @@ int ObLogPlan::prepare_text_retrieval_scan(const ObIArray<ObRawExpr *> &scan_mat
                                                  table_scan->get_text_retrieval_info()))) {
   } else {
     ObTextRetrievalInfo &tr_info = table_scan->get_text_retrieval_info();
+    ObSEArray<ObExprConstraint, 2> constraints;
+    // Only an inverted-index scan may substitute positive posting existence
+    // for BM25. Functional lookup must still produce the original score.
+    if (!table_scan->is_vec_idx_scan() && !table_scan->is_vec_adaptive_scan()) {
+      if (OB_FAIL(ObTransformUtils::check_need_calc_match_score(
+              get_optimizer_context().get_exec_ctx(), get_stmt(), match_against,
+              tr_info.need_calc_relevance_, constraints))) {
+      } else if (!tr_info.need_calc_relevance_ &&
+                 OB_FAIL(append_array_no_dup(
+                     get_optimizer_context().get_query_ctx()->all_expr_constraints_, constraints))) {
+      }
+    }
     tr_info.match_expr_ = match_against;
     tr_info.pushdown_match_filter_ = match_pred;
     // The mapping table is absent when the data-table rowkey is used as the document ID.
@@ -12044,7 +12056,8 @@ int ObLogPlan::prepare_text_retrieval_scan(const ObIArray<ObRawExpr *> &scan_mat
     if (table_scan->is_vec_adaptive_scan() || table_scan->is_vec_idx_scan_post_filter()) {
       table_scan->set_rowkey_doc_table_id(tr_info.rowkey_idx_tid_);
     }
-    if (OB_FAIL(table_scan->set_is_skip_rowkey_doc(tr_info.doc_id_idx_tid_ == OB_INVALID_ID))) {
+    if (OB_FAIL(ret)) {
+    } else if (OB_FAIL(table_scan->set_is_skip_rowkey_doc(tr_info.doc_id_idx_tid_ == OB_INVALID_ID))) {
     } else if (OB_FAIL(table_scan->set_is_skip_rowkey_doc(tr_info.rowkey_idx_tid_ == OB_INVALID_ID))) {
     }
   }
@@ -12184,7 +12197,6 @@ int ObLogPlan::prepare_text_retrieval_info(const uint64_t ref_table_id,
   uint64_t inv_idx_tid = OB_INVALID_ID;
   ObSEArray<ObAuxTableMetaInfo, 4> index_infos;
   bool need_calc_relevance = true;
-  ObSEArray<ObExprConstraint, 2> constraints;
   uint64_t docid_col_id = OB_INVALID_ID;
   if (OB_ISNULL(match_against) || OB_ISNULL(get_stmt()) || OB_ISNULL(get_optimizer_context().get_query_ctx())) {
     ret = OB_INVALID_ARGUMENT;
@@ -12251,18 +12263,6 @@ int ObLogPlan::prepare_text_retrieval_info(const uint64_t ref_table_id,
     }
   }
   if (OB_SUCC(ret)) {
-    /*
-    if (OB_FAIL(ObTransformUtils::check_need_calc_match_score(get_optimizer_context().get_exec_ctx(),
-                                                              get_stmt(),
-                                                              match_against,
-                                                              need_calc_relevance,
-                                                              constraints))) {
-      LOG_WARN("failed to check need calc relevance", K(ret));
-    } else if (!need_calc_relevance &&
-               OB_FAIL(append_array_no_dup(get_optimizer_context().get_query_ctx()->all_expr_constraints_, constraints))) {
-      LOG_WARN("failed to append array no dup", K(ret));
-    }
-    */
     tr_info.match_expr_ = match_against;
     tr_info.inv_idx_tid_ = inv_idx_tid;
     tr_info.fwd_idx_tid_ = fwd_idx_tid;

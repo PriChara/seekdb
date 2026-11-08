@@ -287,14 +287,14 @@ int ObDASDomainUtils::build_ft_doc_word_infos(
   static constexpr int64_t FT_MAX_WORD_BUCKET = 997;
   const int64_t ft_word_bkt_cnt = MIN(MAX(fulltext.length() / 10, 2), FT_MAX_WORD_BUCKET);
   int64_t doc_length = 0;
-  thread_local ObFTWordMap ft_word_map;
+  ObFTWordMap ft_word_map;
   void *rows_buf = nullptr;
   blocksstable::ObDatumRow *rows = nullptr;
   if (OB_ISNULL(helper) || OB_UNLIKELY(!ft_obj_meta.is_valid())) {
     ret = OB_INVALID_ARGUMENT;
   } else if (0 == fulltext.length()) {
     ret = OB_ITER_END;
-  } else if (OB_UNLIKELY(!ft_word_map.created()) && OB_FAIL(ft_word_map.create(FT_MAX_WORD_BUCKET, common::ObMemAttr("FTWordMap")))) {
+  } else if (OB_FAIL(ft_word_map.create(ft_word_bkt_cnt, common::ObMemAttr("FTWordMap")))) {
   } else if (OB_FAIL(segment_and_calc_word_count(allocator,
                                                  helper,
                                                  ft_obj_meta,
