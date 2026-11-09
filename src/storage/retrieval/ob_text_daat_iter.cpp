@@ -25,18 +25,21 @@ namespace storage
 int ObTextDaaTIter::init(const ObTextDaaTParam &param)
 {
   int ret = OB_SUCCESS;
+  const int64_t stream_count = param.dim_iters_ != nullptr ? param.dim_iters_->count() : 0;
+  const bool use_posting_union = param.allow_posting_union_
+      && stream_count > 0 && stream_count <= 6;
   if (OB_ISNULL(param.base_param_) || OB_ISNULL(param.dim_iters_) || OB_ISNULL(param.allocator_)
       || OB_ISNULL(param.relevance_collector_)) {
     ret = OB_INVALID_ARGUMENT;
   } else if (OB_FAIL(ObSRDaaTIterImpl::init(*param.base_param_, *param.dim_iters_,
-                                            *param.allocator_, *param.relevance_collector_))) {
+                                            *param.allocator_, *param.relevance_collector_,
+                                            !use_posting_union))) {
   } else if (param.base_param_->relevance_expr_ != nullptr &&
              OB_FAIL(bm25_param_estimator_.init(param.bm25_param_est_ctx_))) {
   } else {
     mode_flag_ = param.mode_flag_;
     function_lookup_mode_ = param.function_lookup_mode_;
-    use_posting_union_ = param.allow_posting_union_
-        && dim_iters_->count() > 0 && dim_iters_->count() <= 3;
+    use_posting_union_ = use_posting_union;
     if (use_posting_union_) {
       for (int64_t i = 0; i < dim_iters_->count(); ++i) {
         iter_domain_ids_[i] = nullptr;
@@ -90,15 +93,14 @@ int ObTextDaaTIter::do_one_merge_round(int64_t &count)
   int64_t *pending = next_round_iter_idxes_.get_data();
   for (int64_t i = 0; OB_SUCC(ret) && i < next_round_cnt_; ++i) {
     const int64_t index = pending[i];
-    ObISRDaaTDimIter *iter = dim_iters_->at(index);
+    auto *iter = static_cast<ObTextRetrievalDaaTTokenIter *>(dim_iters_->at(index));
     if (OB_ISNULL(iter)) {
       ret = OB_ERR_UNEXPECTED;
-    } else if (OB_FAIL(iter->get_next_row())) {
+    } else if (OB_FAIL(iter->get_next_posting(ids[index]))) {
       if (ret == OB_ITER_END) {
         ids[index] = nullptr;
         ret = OB_SUCCESS;
       }
-    } else if (OB_FAIL(iter->get_curr_id(ids[index]))) {
     } else if (OB_ISNULL(ids[index])) {
       ret = OB_ERR_UNEXPECTED;
     }
@@ -107,16 +109,14 @@ int ObTextDaaTIter::do_one_merge_round(int64_t &count)
   // Advance only the streams that contributed the minimum ID, so an ID
   // shared by several streams is emitted once without a heap or scores.
   next_round_cnt_ = 0;
-  ObSRMergeItem minimum;
-  ObSRMergeItem current;
+  const ObDatum *minimum = nullptr;
   const int64_t stream_count = dim_iters_->count();
   for (int64_t i = 0; OB_SUCC(ret) && i < stream_count; ++i) {
     if (ids[i] != nullptr) {
-      current.iter_idx_ = i;
-      int64_t order = 0;
-      if (minimum.iter_idx_ >= 0 && OB_FAIL(merge_cmp_.cmp(current, minimum, order))) {
-      } else if (minimum.iter_idx_ < 0 || order < 0) {
-        minimum.iter_idx_ = i;
+      int order = 0;
+      if (minimum != nullptr && OB_FAIL(merge_cmp_.compare_ids(*ids[i], *minimum, order))) {
+      } else if (minimum == nullptr || order < 0) {
+        minimum = ids[i];
         pending[0] = i;
         next_round_cnt_ = 1;
       } else if (order == 0) {
@@ -125,10 +125,10 @@ int ObTextDaaTIter::do_one_merge_round(int64_t &count)
     }
   }
   if (OB_SUCC(ret)) {
-    if (minimum.iter_idx_ < 0) {
+    if (minimum == nullptr) {
       ret = OB_ITER_END;
     } else {
-      ret = cache_result(count, *ids[minimum.iter_idx_], 1.0);
+      ret = ObSRDaaTIterImpl::cache_result(count, *minimum, 1.0);
     }
   }
   return ret;

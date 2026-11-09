@@ -21,6 +21,10 @@ SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM perf_match_semantics
 SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM perf_match_semantics
   WHERE MATCH(body) AGAINST('alpha beta') = 0;
 
+--echo # Posting union deduplicates overlapping matches with six terms
+SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM perf_match_semantics
+  WHERE MATCH(body) AGAINST('alpha beta gamma delta qxmissing qxabsent');
+
 --echo # Numeric projection, aggregation and ordering retain BM25
 SELECT id, (MATCH(body) AGAINST('alpha beta') + 0.25 > 1.25) AS above_one
   FROM perf_match_semantics WHERE MATCH(body) AGAINST('alpha beta') ORDER BY id;

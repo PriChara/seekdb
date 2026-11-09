@@ -60,8 +60,7 @@ int ObSRMergeCmp::cmp(
     ret = OB_NOT_INIT;
   } else {
     int tmp_ret = 0;
-    if (OB_FAIL(cmp_func_(
-            get_id_datum(l.iter_idx_), get_id_datum(r.iter_idx_), tmp_ret, nullptr))) {
+    if (OB_FAIL(compare_ids(get_id_datum(l.iter_idx_), get_id_datum(r.iter_idx_), tmp_ret))) {
     } else {
       cmp_ret = tmp_ret;
     }
@@ -90,7 +89,8 @@ int ObSRDaaTIterImpl::init(
     ObSparseRetrievalMergeParam &iter_param,
     ObIArray<ObISRDaaTDimIter *> &dim_iters,
     ObIAllocator &iter_allocator,
-    ObSRDaaTRelevanceCollector &relevance_collector)
+    ObSRDaaTRelevanceCollector &relevance_collector,
+    const bool need_merge_heap)
 {
   int ret = OB_SUCCESS;
   if (IS_INIT) {
@@ -124,7 +124,7 @@ int ObSRDaaTIterImpl::init(
     } else if (OB_FAIL(buffered_relevances_.init(max_batch_size))) {
     } else if (OB_FAIL(buffered_relevances_.prepare_allocate(max_batch_size))) {
     } else if (OB_FAIL(merge_cmp_.init(iter_param_->id_proj_expr_->datum_meta_, &iter_domain_ids_))) {
-    } else if (OB_FAIL(init_merge_heap(dim_iters_->count()))) {
+    } else if (need_merge_heap && OB_FAIL(init_merge_heap(dim_iters_->count()))) {
     } else {
       for (int64_t i = 0; i < dim_iters.count(); ++i) {
         next_round_iter_idxes_[i] = i;

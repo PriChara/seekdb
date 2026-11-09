@@ -45,6 +45,10 @@ struct ObSRMergeCmp
 
   int init(sql::ObDatumMeta id_meta, const ObFixedArray<const ObDatum *, ObIAllocator> *iter_ids);
   int cmp(const ObSRMergeItem &l, const ObSRMergeItem &r, int64_t &cmp_ret);
+  int compare_ids(const ObDatum &left, const ObDatum &right, int &order) const
+  {
+    return cmp_func_(left, right, order, nullptr);
+  }
 private:
   inline const ObDatum &get_id_datum(const int64_t iter_idx)
   {
@@ -76,7 +80,8 @@ public:
       ObSparseRetrievalMergeParam &iter_param,
       ObIArray<ObISRDaaTDimIter *> &dim_iters,
       ObIAllocator &iter_allocator,
-      ObSRDaaTRelevanceCollector &relevance_collector);
+      ObSRDaaTRelevanceCollector &relevance_collector,
+      bool need_merge_heap = true);
   virtual void reuse(const bool switch_tablet = false) override;
   virtual void reset() override;
   virtual int get_query_max_score(double &score) override;
