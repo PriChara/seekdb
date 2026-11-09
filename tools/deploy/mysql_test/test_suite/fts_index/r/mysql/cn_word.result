@@ -93,6 +93,10 @@ tokenize('OceanBase是一款非常稳定数据库，在110个星球上都非常�
 select tokenize('人际关系', 'ik');
 tokenize('人际关系', 'ik')
 ["人际关系"]
+select JSON_CONTAINS(tokens, '["oceanbase", "人际关系"]') as found_both
+from (select tokenize(cast(concat('OceanBase', repeat(' ', 1002), '人际关系') as char character set utf8mb4), 'ik') as tokens) t;
+found_both
+1
 select tokenize('中华人民共和国人民大会堂', 'ik', '[{"additional_args": [{"ik_mode": "smart"}]}]');
 tokenize('中华人民共和国人民大会堂', 'ik', '[{"additional_args": [{"ik_mode": "smart"}]}]')
 ["人民大会堂", "中华人民共和国"]

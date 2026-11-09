@@ -30,6 +30,10 @@ namespace oceanbase
 namespace storage
 {
 class ObFTDictHub;
+class ObIKLetterProcessor;
+class ObIKQuantifierProcessor;
+class ObIKCJKProcessor;
+class ObIKSurrogateProcessor;
 
 class ObIKFTParser final : public ObITokenIterator
 {
@@ -40,7 +44,10 @@ public:
         coll_type_(ObCollationType::CS_TYPE_INVALID),
         ctx_(nullptr),
         hub_(hub),
-        segmenters_(allocator_),
+        letter_processor_(nullptr),
+        quantifier_processor_(nullptr),
+        cjk_processor_(nullptr),
+        surrogate_processor_(nullptr),
         cache_main_(allocator),
         cache_quan_(allocator),
         cache_stop_(allocator),
@@ -76,7 +83,7 @@ private:
 
   int init_single_dict(ObFTDictDesc desc, ObFTCacheRangeContainer &container);
 
-  int init_segmenter(const ObFTParserParam &param);
+  int init_segmenters();
 
   int init_ctx(const ObFTParserParam &param);
 
@@ -96,7 +103,10 @@ private:
   ObCollationType coll_type_;
   TokenizeContext *ctx_;
   ObFTDictHub *hub_;
-  ObList<ObIIKProcessor *, ObIAllocator> segmenters_;
+  ObIKLetterProcessor *letter_processor_;
+  ObIKQuantifierProcessor *quantifier_processor_;
+  ObIKCJKProcessor *cjk_processor_;
+  ObIKSurrogateProcessor *surrogate_processor_;
 
   // For now there's no change of dict in one query, so we can pin dict this level.
   ObFTCacheRangeContainer cache_main_;

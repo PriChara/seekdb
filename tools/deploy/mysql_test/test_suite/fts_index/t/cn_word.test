@@ -100,6 +100,10 @@ select tokenize('OceanBase是一款非常稳定数据库，在110个星球上都
 
 select tokenize('人际关系', 'ik');
 
+# Check that both sides of an IK batch boundary emit tokens.
+select JSON_CONTAINS(tokens, '["oceanbase", "人际关系"]') as found_both
+from (select tokenize(cast(concat('OceanBase', repeat(' ', 1002), '人际关系') as char character set utf8mb4), 'ik') as tokens) t;
+
 
 select tokenize('中华人民共和国人民大会堂', 'ik', '[{"additional_args": [{"ik_mode": "smart"}]}]');
 
