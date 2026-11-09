@@ -37,16 +37,11 @@ namespace sql
 using storage::ObFTWordMap;
 
 
-ObObjDatumMapType ObFTIndexRowCache::FTS_INDEX_TYPES[] = {OBJ_DATUM_STRING, OBJ_DATUM_STRING, OBJ_DATUM_8BYTE_DATA, OBJ_DATUM_8BYTE_DATA};
-ObObjDatumMapType ObFTIndexRowCache::FTS_DOC_WORD_TYPES[] = {OBJ_DATUM_STRING, OBJ_DATUM_STRING, OBJ_DATUM_8BYTE_DATA, OBJ_DATUM_8BYTE_DATA};
-
-ObExprOperatorType ObFTIndexRowCache::FTS_INDEX_EXPR_TYPE[] = {T_FUN_SYS_WORD_SEGMENT, T_FUN_SYS_DOC_ID, T_FUN_SYS_WORD_COUNT, T_FUN_SYS_DOC_LENGTH};
-ObExprOperatorType ObFTIndexRowCache::FTS_DOC_WORD_EXPR_TYPE[] = {T_FUN_SYS_DOC_ID, T_FUN_SYS_WORD_SEGMENT, T_FUN_SYS_WORD_COUNT, T_FUN_SYS_DOC_LENGTH};
-
 ObFTIndexRowCache::ObFTIndexRowCache()
-  : rows_(),
-    row_idx_(0),
-    is_fts_index_aux_(true),
+  : words_(),
+    word_iter_(),
+    doc_id_(),
+    doc_length_(0),
     helper_(),
     is_inited_(false)
 {
@@ -58,7 +53,6 @@ ObFTIndexRowCache::~ObFTIndexRowCache()
 }
 
 int ObFTIndexRowCache::init(
-    const bool is_fts_index_aux,
     const common::ObString &parser_name,
     const common::ObString &parser_properties)
 {
@@ -70,8 +64,6 @@ int ObFTIndexRowCache::init(
   } else if (OB_FAIL(CURRENT_CONTEXT->CREATE_CONTEXT(merge_memctx_, param))) {
   } else if (OB_FAIL(helper_.init(&(merge_memctx_->get_arena_allocator()), parser_name, parser_properties))) {
   } else {
-    row_idx_ = 0;
-    is_fts_index_aux_ = is_fts_index_aux;
     is_inited_ = true;
   }
   if (OB_UNLIKELY(!is_inited_)) {
@@ -87,41 +79,50 @@ int ObFTIndexRowCache::segment(const common::ObObjMeta &ft_obj_meta,
   int ret = OB_SUCCESS;
   if (OB_UNLIKELY(!is_inited_)) {
     ret = OB_NOT_INIT;
-  } else if (FALSE_IT(reuse())) {
-  } else if (OB_FAIL(ObDASDomainUtils::generate_fulltext_word_rows(merge_memctx_->get_arena_allocator(),
-                                                                   &helper_,
-                                                                   ft_obj_meta,
-                                                                   doc_id_datum,
-                                                                   fulltext,
-                                                                   is_fts_index_aux_,
-                                                                   rows_))) {
   } else {
-    row_idx_ = 0;
+    reuse();
+    if (OB_UNLIKELY(!ft_obj_meta.is_valid())) {
+      ret = OB_INVALID_ARGUMENT;
+    } else if (fulltext.empty()) {
+      ret = OB_ITER_END;
+    } else {
+      const int64_t buckets = MIN(MAX(fulltext.length() / 10, 2), 997);
+      if (words_.created() && words_.bucket_count() != common::hash::cal_next_prime(buckets)
+          && OB_FAIL(words_.destroy())) {
+      } else if (!words_.created() && OB_FAIL(words_.create(buckets, common::ObMemAttr("FTWordMap")))) {
+      } else if (OB_FAIL(helper_.segment(ft_obj_meta, fulltext.ptr(), fulltext.length(), doc_length_, words_))) {
+      } else if (words_.empty()) {
+        ret = OB_ITER_END;
+      } else {
+        doc_id_ = doc_id_datum;
+        word_iter_ = words_.begin();
+      }
+    }
   }
-  LOG_TRACE("word segment", K(ret), K(row_idx_), K(rows_.count()), K(doc_id_datum), K(fulltext));
   return ret;
 }
 
-int ObFTIndexRowCache::get_next_row(blocksstable::ObDatumRow *&row)
+int ObFTIndexRowCache::get_next_word(const ObDatum *&word, uint64_t &word_count)
 {
   int ret = OB_SUCCESS;
   if (OB_UNLIKELY(!is_inited_)) {
     ret = OB_NOT_INIT;
-  } else if (row_idx_ >= rows_.count()) {
+  } else if (words_.empty() || word_iter_ == words_.end()) {
     ret = OB_ITER_END;
   } else {
-    row = (rows_[row_idx_]);
-    ++row_idx_;
+    word = &word_iter_->first.get_word();
+    word_count = word_iter_->second;
+    ++word_iter_;
   }
-  LOG_TRACE("get next row", K(ret), KPC(row), K(row_idx_), K(rows_.count()));
   return ret;
 }
 
 void ObFTIndexRowCache::reset()
 {
-  rows_.reset();
-  row_idx_ = 0;
-  is_fts_index_aux_ = true;
+  word_iter_ = storage::ObFTWordMap::const_iterator();
+  words_.destroy();
+  doc_id_.reset();
+  doc_length_ = 0;
   helper_.reset();
   if (OB_NOT_NULL(merge_memctx_)) {
     DESTROY_CONTEXT(merge_memctx_);
@@ -132,8 +133,13 @@ void ObFTIndexRowCache::reset()
 
 void ObFTIndexRowCache::reuse()
 {
-  rows_.reuse();
-  row_idx_ = 0;
+  word_iter_ = storage::ObFTWordMap::const_iterator();
+  // The map keys can refer to the document arena.
+  if (!words_.empty()) {
+    words_.reuse();
+  }
+  doc_id_.reset();
+  doc_length_ = 0;
   if (OB_NOT_NULL(merge_memctx_)) {
     merge_memctx_->reset_remain_one_page();
   }

@@ -82,4 +82,17 @@ SELECT COUNT(*) AS hits,MAX(score)>MIN(score) AS varied_scores,SUM(score)>0 AS p
         WHERE MATCH(body) AGAINST('alpha beta')) t;
 DROP TABLE perf_match_batches;
 DROP TABLE perf_match_semantics;
+--echo # Build an index over alternating document lengths and empty documents
+CREATE TABLE perf_match_backfill(id INT PRIMARY KEY, body TEXT);
+INSERT INTO perf_match_backfill VALUES
+  (1,'alpha alpha'),(2,''),(3,CONCAT('gamma',REPEAT(' filler',80))),
+  (4,'alpha delta'),(5,NULL),(6,'beta');
+CREATE FULLTEXT INDEX ft ON perf_match_backfill(body) WITH PARSER beng;
+SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM perf_match_backfill
+  WHERE MATCH(body) AGAINST('alpha');
+SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM perf_match_backfill
+  WHERE MATCH(body) AGAINST('gamma');
+SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM perf_match_backfill
+  WHERE MATCH(body) AGAINST('beta');
+DROP TABLE perf_match_backfill;
 --enable_query_log

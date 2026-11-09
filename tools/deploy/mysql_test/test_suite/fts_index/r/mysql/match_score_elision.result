@@ -49,3 +49,10 @@ hits	id_sum
 257	66690
 hits	varied_scores	positive_sum
 258	1	1
+# Build an index over alternating document lengths and empty documents
+ids
+1,4
+ids
+3
+ids
+6

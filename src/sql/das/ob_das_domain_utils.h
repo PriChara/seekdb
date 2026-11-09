@@ -35,28 +35,24 @@ namespace sql
 class ObFTIndexRowCache final
 {
 public:
-  static ObObjDatumMapType FTS_INDEX_TYPES[4];
-  static ObObjDatumMapType FTS_DOC_WORD_TYPES[4];
-  static ObExprOperatorType FTS_INDEX_EXPR_TYPE[4];
-  static ObExprOperatorType FTS_DOC_WORD_EXPR_TYPE[4];
-
   ObFTIndexRowCache();
   ~ObFTIndexRowCache();
   int init(
-      const bool is_fts_index_aux,
       const common::ObString &parser_name,
       const common::ObString &parser_properties);
   int segment(const common::ObObjMeta &ft_obj_meta, const ObDatum &doc_id, const common::ObString &fulltext);
-  int get_next_row(blocksstable::ObDatumRow *&row);
+  int get_next_word(const ObDatum *&word, uint64_t &word_count);
+  const ObDatum &doc_id() const { return doc_id_; }
+  uint64_t doc_length() const { return doc_length_; }
   void reset();
   void reuse();
-  TO_STRING_KV(K_(row_idx), K_(is_fts_index_aux), K_(helper), K_(is_inited),
-               "row_count", rows_.count());
+  TO_STRING_KV(K_(doc_length), K_(helper), K_(is_inited), "word_count", words_.size());
 private:
   lib::MemoryContext merge_memctx_;
-  ObDomainIndexRow rows_;
-  uint64_t row_idx_;
-  bool is_fts_index_aux_;
+  storage::ObFTWordMap words_;
+  storage::ObFTWordMap::const_iterator word_iter_;
+  ObDatum doc_id_;
+  int64_t doc_length_;
   storage::ObFTParseHelper helper_;
   bool is_inited_;
 

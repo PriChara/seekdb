@@ -679,6 +679,7 @@ ObTableScanOp::ObTableScanOp(ObExecContext &exec_ctx, const ObOpSpec &spec, ObOp
     in_rescan_(false),
     domain_index_(),
     fts_index_(),
+    fts_output_exprs_{},
     output_   (nullptr),
     fold_iter_(nullptr),
     iter_tree_(nullptr),
@@ -1437,7 +1438,8 @@ int ObTableScanOp::inner_open()
     ret = OB_ERR_UNEXPECTED;
   } else if (OB_FAIL(ObDASUtils::check_nested_sql_mutating(MY_SPEC.ref_table_id_, ctx_, true))) {
   } else if (OB_FAIL(init_table_scan_rtdef())) {
-  } else if (MY_SPEC.is_fts_ddl_ && OB_FAIL(fts_index_.init(MY_SPEC.is_fts_index_aux_, MY_SPEC.parser_name_,
+  } else if (MY_SPEC.is_fts_ddl_ && OB_FAIL(init_fts_output_exprs())) {
+  } else if (MY_SPEC.is_fts_ddl_ && OB_FAIL(fts_index_.init(MY_SPEC.parser_name_,
           MY_SPEC.parser_properties_))) {
   } else {
     if (MY_SPEC.report_col_checksum_) {
@@ -3627,18 +3629,15 @@ int ObTableScanOp::fill_generated_cellid_mbr(
 int ObTableScanOp::inner_get_next_fts_index_row()
 {
   int ret = OB_SUCCESS;
-  blocksstable::ObDatumRow *row = nullptr;
-  if (OB_FAIL(fts_index_.get_next_row(row))) {
+  const ObDatum *word = nullptr;
+  uint64_t word_count = 0;
+  if (OB_FAIL(fts_index_.get_next_word(word, word_count))) {
     if (OB_ITER_END != ret) {
-    } else if (OB_FAIL(fetch_next_fts_index_rows())) { // need overwrite return code
-      if (OB_ITER_END != ret) {
-      }
-    } else if (OB_FAIL(fts_index_.get_next_row(row))) {
-      if (OB_ITER_END != ret) {
-      }
+    } else if (OB_FAIL(fetch_next_fts_index_rows())) {
+    } else if (OB_FAIL(fts_index_.get_next_word(word, word_count))) {
     }
   }
-  if (FAILEDx(fill_generated_fts_cols(row))) {
+  if (FAILEDx(fill_generated_fts_cols(*word, word_count))) {
   }
   return ret;
 }
@@ -3648,18 +3647,14 @@ int ObTableScanOp::fetch_next_fts_index_rows()
   int ret = OB_SUCCESS;
   bool has_segment_word = false;
   while (OB_SUCC(ret) && !has_segment_word) {
-    ObExpr *ft_expr = nullptr;
-    ObExpr *doc_id_expr = nullptr;
+    ObExpr *ft_expr = fts_output_exprs_[FTS_WORD];
+    ObExpr *doc_id_expr = fts_output_exprs_[FTS_DOC_ID];
     ObDatum *ft_datum = nullptr;
     ObDatum *doc_id_datum = nullptr;
 
     if (OB_FAIL(ObTableScanOp::inner_get_next_row_implement())) {
       if (OB_ITER_END != ret) {
       }
-    } else if (OB_FAIL(get_output_fts_col_expr_by_type(T_FUN_SYS_DOC_ID, doc_id_expr))) {
-    } else if (OB_FAIL(get_output_fts_col_expr_by_type(T_FUN_SYS_WORD_SEGMENT, ft_expr))) {
-    } else if (OB_ISNULL(ft_expr) || OB_ISNULL(doc_id_expr)) {
-      ret = OB_ERR_UNEXPECTED;
     } else if (OB_FAIL(ft_expr->eval(eval_ctx_, ft_datum))) {
     } else if (OB_FAIL(doc_id_expr->eval(eval_ctx_, doc_id_datum))) {
     } else if (OB_ISNULL(ft_datum) || OB_ISNULL(doc_id_datum)) {
@@ -3685,26 +3680,31 @@ int ObTableScanOp::fetch_next_fts_index_rows()
   return ret;
 }
 
-int ObTableScanOp::fill_generated_fts_cols(blocksstable::ObDatumRow *row)
+int ObTableScanOp::init_fts_output_exprs()
 {
   int ret = OB_SUCCESS;
-  const ObObjDatumMapType *types = MY_SPEC.is_fts_index_aux_ ? ObFTIndexRowCache::FTS_INDEX_TYPES : ObFTIndexRowCache::FTS_DOC_WORD_TYPES;
-  const ObExprOperatorType *expr_types = MY_SPEC.is_fts_index_aux_ ? ObFTIndexRowCache::FTS_INDEX_EXPR_TYPE : ObFTIndexRowCache::FTS_DOC_WORD_EXPR_TYPE;
-  if (OB_ISNULL(row)) {
-    ret = OB_INVALID_ARGUMENT;
+  if (OB_FAIL(get_output_fts_col_expr_by_type(T_FUN_SYS_WORD_SEGMENT, fts_output_exprs_[FTS_WORD]))) {
+  } else if (OB_FAIL(get_output_fts_col_expr_by_type(T_FUN_SYS_DOC_ID, fts_output_exprs_[FTS_DOC_ID]))) {
+  } else if (OB_FAIL(get_output_fts_col_expr_by_type(T_FUN_SYS_WORD_COUNT, fts_output_exprs_[FTS_WORD_COUNT]))) {
+  } else if (OB_FAIL(get_output_fts_col_expr_by_type(T_FUN_SYS_DOC_LENGTH, fts_output_exprs_[FTS_DOC_LENGTH]))) {
+  }
+  return ret;
+}
+
+int ObTableScanOp::fill_generated_fts_cols(const ObDatum &word, uint64_t word_count)
+{
+  int ret = OB_SUCCESS;
+  if (OB_FAIL(fts_output_exprs_[FTS_WORD]->locate_datum_for_write(eval_ctx_)
+                  .from_storage_datum(word, OBJ_DATUM_STRING))) {
+  } else if (OB_FAIL(fts_output_exprs_[FTS_DOC_ID]->locate_datum_for_write(eval_ctx_)
+                         .from_storage_datum(fts_index_.doc_id(), OBJ_DATUM_STRING))) {
   } else {
-    for (int64_t i = 0; OB_SUCC(ret) && i < share::ObFtsIndexBuilderUtil::OB_FTS_INDEX_OR_DOC_WORD_TABLE_COL_CNT; ++i) {
-      ObExpr *expr = nullptr;
-      if (OB_FAIL(get_output_fts_col_expr_by_type(expr_types[i], expr))) {
-      } else {
-        ObDatum &datum = expr->locate_datum_for_write(eval_ctx_);
-        ObEvalInfo &eval_info = expr->get_eval_info(eval_ctx_);
-        if (OB_FAIL(datum.from_storage_datum(row->storage_datums_[i], types[i]))) {
-        } else {
-          eval_info.evaluated_ = true;
-          eval_info.projected_ = true;
-        }
-      }
+    fts_output_exprs_[FTS_WORD_COUNT]->locate_datum_for_write(eval_ctx_).set_uint(word_count);
+    fts_output_exprs_[FTS_DOC_LENGTH]->locate_datum_for_write(eval_ctx_).set_uint(fts_index_.doc_length());
+    for (ObExpr *expr : fts_output_exprs_) {
+      ObEvalInfo &info = expr->get_eval_info(eval_ctx_);
+      info.evaluated_ = true;
+      info.projected_ = true;
     }
   }
   return ret;
