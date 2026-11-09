@@ -35,7 +35,7 @@ class ObIFTDict;
 class ObDATrieHit final
 {
 public:
-  ObDATrieHit(const ObIFTDict *dict, const int64_t start_pos)
+  ObDATrieHit(const ObIFTDict *dict = nullptr, const int64_t start_pos = 0)
       : dict_(dict), char_cnt_(0), start_pos_(start_pos), end_pos_(start_pos_), base_idx_(0),
         current_check_(0), is_match_(false), is_prefix_(false)
   {
@@ -60,18 +60,6 @@ public:
   void set_match() { is_match_ = true; }
 
   void set_prefix() { is_prefix_ = true; }
-
-  ObDATrieHit &operator=(const ObDATrieHit &other)
-  {
-    char_cnt_ = other.char_cnt_;
-    start_pos_ = other.start_pos_;
-    end_pos_ = other.end_pos_;
-    base_idx_ = other.base_idx_;
-    current_check_ = other.current_check_;
-    is_match_ = other.is_match_;
-    is_prefix_ = other.is_prefix_;
-    return *this;
-  }
 
   bool operator==(const ObDATrieHit &other) const
   {

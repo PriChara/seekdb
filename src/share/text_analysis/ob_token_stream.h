@@ -75,12 +75,14 @@ protected:
   virtual int inner_open(const ObDatum &document, const ObCharsetInfo *cs) override;
   INHERIT_TO_STRING_KV("ObTextTokenizer", ObTextTokenizer, K_(trav_pos), KP_(curr_token_ptr));
 private:
-  bool found_delimiter();
+  bool found_delimiter() const;
+  int64_t current_char_length(const char *doc, uint32_t doc_len) const;
   const char *get_trav_ptr() { return input_doc_->ptr_ + trav_pos_; }
   uint32_t get_input_buf_len() { return input_doc_->len_; }
 private:
   const char *curr_token_ptr_;
   int64_t trav_pos_;
+  bool is_utf8mb4_;
 };
 
 class ObTokenNormalizer : public ObITokenStream

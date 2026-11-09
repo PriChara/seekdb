@@ -66,7 +66,8 @@ int ObTextTokenizer::open(const ObDatum &document, const ObCharsetInfo *cs)
 ObTextWhitespaceTokenizer::ObTextWhitespaceTokenizer()
   : ObTextTokenizer(),
     curr_token_ptr_(nullptr),
-    trav_pos_(0)
+    trav_pos_(0),
+    is_utf8mb4_(false)
 {
 }
 
@@ -74,6 +75,7 @@ void ObTextWhitespaceTokenizer::reset()
 {
   curr_token_ptr_ = nullptr;
   trav_pos_ = 0;
+  is_utf8mb4_ = false;
   ObTextTokenizer::reset();
 }
 
@@ -82,6 +84,8 @@ int ObTextWhitespaceTokenizer::inner_open(const ObDatum &document, const ObChars
   int ret = OB_SUCCESS;
   curr_token_ptr_ = nullptr;
   trav_pos_ = 0;
+  is_utf8mb4_ = ObCharset::charset_type_by_coll(static_cast<ObCollationType>(cs->number))
+      == CHARSET_UTF8MB4;
   return ret;
 }
 
@@ -98,7 +102,7 @@ int ObTextWhitespaceTokenizer::get_next(ObDatum &next_token, int64_t &token_freq
     int64_t token_len = 0;
     // to next non-whitespace pos
     while (OB_SUCC(ret) && found_delimiter()) {
-      const int64_t c_len = ob_mbcharlen_ptr(cs_, doc + trav_pos_, doc + doc_len);
+      const int64_t c_len = current_char_length(doc, doc_len);
       trav_pos_ += c_len;
       if (trav_pos_ >= doc_len || 0 == c_len) {// if char is invalid, just skip the rest of document
         iter_end_ = true;
@@ -112,7 +116,7 @@ int ObTextWhitespaceTokenizer::get_next(ObDatum &next_token, int64_t &token_freq
 
     // to next whitespace pos
     while (OB_SUCC(ret) && !found_delimiter()) {
-      const int64_t c_len = ob_mbcharlen_ptr(cs_, doc + trav_pos_, doc + doc_len);
+      const int64_t c_len = current_char_length(doc, doc_len);
       trav_pos_ += c_len;
       token_len += c_len;
       if (trav_pos_ >= doc_len || 0 == c_len) {
@@ -134,12 +138,18 @@ int ObTextWhitespaceTokenizer::get_next(ObDatum &next_token, int64_t &token_freq
   return ret;
 }
 
-bool ObTextWhitespaceTokenizer::found_delimiter()
+bool ObTextWhitespaceTokenizer::found_delimiter() const
 {
-  bool found = false;
-  const char *curr_char = input_doc_->ptr_ + trav_pos_;
-  found = ob_isspace(cs_, *curr_char) || ob_iscntrl(cs_, *curr_char) || ob_ispunct(cs_, *curr_char);
-  return found;
+  const unsigned char byte = static_cast<unsigned char>(input_doc_->ptr_[trav_pos_]);
+  return cs_->ctype != nullptr && (cs_->ctype[byte + 1] & (_MY_SPC | _MY_CTR | _MY_PNT)) != 0;
+}
+
+int64_t ObTextWhitespaceTokenizer::current_char_length(const char *doc, uint32_t doc_len) const
+{
+  const char *current = doc + trav_pos_;
+  return is_utf8mb4_ && static_cast<unsigned char>(*current) < 0x80
+      ? 1
+      : ob_mbcharlen_ptr(cs_, current, doc + doc_len);
 }
 
 ObTokenNormalizer::ObTokenNormalizer()
