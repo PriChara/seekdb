@@ -1,0 +1,14 @@
+{
+  "synthetic": false,
+  "scope": "MiniVectorDB 加赛第一版本，保留本轮实际学生请求和本地实验输出。",
+  "conversations": [
+    {"role": "student", "content": "我们先不管这个了我们现在开始做加赛部分的题吧"},
+    {"role": "assistant", "content": "第一版已经通过官方公开的 20 个用例，包括重启、事务回滚和失败语句原子性。我接下来补上真正参与查询的向量索引，再单独验证强制终止后的恢复。"}
+  ],
+  "experiments": [
+    {"source": "official public driver, Linux container", "output": "sql_crud: PASS; sql_comparisons: PASS; sql_ordering: PASS; sql_empty: PASS; sql_primary_key: PASS; sql_unicode: PASS; sql_bigint: PASS; sql_unsupported: PASS; storage_restart: PASS; vector_euclidean: PASS; transaction_commit: PASS; transaction_rollback: PASS; storage_mutations: PASS; storage_multiple_tables: PASS; vector_ties_and_filter: PASS; vector_float32: PASS; vector_index_maintenance: PASS; transaction_failed_insert: PASS; transaction_autocommit_atomic: PASS; transaction_shutdown_rollback: PASS"},
+    {"source": "tests/crash_recovery.py", "output": "PASS: two process kills, committed rows recovered, uncommitted and failed rows absent"},
+    {"source": "tests/vector_search.py", "output": "PASS: exact matches 24 independent TopK results, ANN recall=1.000, elapsed=0.067s"}
+  ],
+  "limitations": "本轮实现和上述实验由 Agent 执行。当前记录没有学生独立设计、解释实验或复盘的材料，也没有正式评测结果。"
+}
