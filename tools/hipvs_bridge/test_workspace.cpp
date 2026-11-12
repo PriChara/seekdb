@@ -36,7 +36,7 @@ static int cuvsCagraIndexCreate(Index** p) { *p=new Index{}; return 0; }
 static int cuvsCagraIndexDestroy(Index* p) { delete p; return 0; }
 static int cuvsCagraBuild(int,Params* params,DLManagedTensor* t,Index* i) {
   assert(params->build_algo==NN_DESCENT && params->graph_degree==128);
-  assert(params->intermediate_graph_degree==160 && params->nn_descent_niter==100);
+  assert(params->intermediate_graph_degree==160 && params->nn_descent_niter==24);
   i->n=t->dl_tensor.shape[0]; i->dim=t->dl_tensor.shape[1]; return 0;
 }
 static int cuvsRMMAlloc(int,void** p,size_t n) {

@@ -132,11 +132,9 @@ This candidate reuses per-index device allocations and search parameters under
 a mutex. A warm query that fits the workspace avoids three device allocations
 and three frees. The snapshot writer streams from a file mapping and falls
 back to buffered reads if mapping fails. The snapshot layout and search
-parameters are preserved. NN-Descent refines 160 candidate edges per vector
-instead of the 192 used in the preceding candidate, while retaining 128
-final edges and the 100-iteration limit. This reduces the intermediate
-graph width by another 16.7%. Measure build time and recall against the
-frozen V5 baseline on AMD hardware.
+parameters are preserved. NN-Descent retains the previous 160 intermediate
+and 128 final edges per vector, with a refinement limit of 24 iterations.
+Measure build time and recall against the frozen V5 baseline on AMD hardware.
 
 Run the CPU bridge contract check on Linux with a C++17 compiler:
 
