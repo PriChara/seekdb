@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <cstring>
 #include <pthread.h>
+#include <sys/mman.h>
 #include "vsag/vsag.h"
 #include "vsag/errors.h"
 #include "vsag/dataset.h"
@@ -379,6 +380,26 @@ static bool ob_cuvs_read(std::istream &in, void *data, size_t bytes) {
   return true;
 }
 
+// Stream the staged hipVS snapshot from its mapped pages. On mapping failure
+// the same bytes can still be read through the original bounded buffer.
+static bool write_cuvs_graph(std::ostream &out, FILE *file, size_t graph_bytes) {
+  void *graph = ::mmap(nullptr, graph_bytes, PROT_READ, MAP_PRIVATE, ::fileno(file), 0);
+  if (graph != MAP_FAILED) {
+    const bool written = ob_cuvs_write(out, graph, graph_bytes);
+    ::munmap(graph, graph_bytes);
+    return written;
+  }
+  std::vector<char> chunk(65536);
+  while (graph_bytes > 0) {
+    const size_t bytes = std::min(graph_bytes, chunk.size());
+    if (::fread(chunk.data(), 1, bytes, file) != bytes || !ob_cuvs_write(out, chunk.data(), bytes)) {
+      return false;
+    }
+    graph_bytes -= bytes;
+  }
+  return true;
+}
+
 // Returns false when the index is not a GPU candidate and must use the VSAG format.
 static bool ob_cuvs_serialize(void *key, std::ostream &out, int &ret) {
   ret = OB_SUCCESS;
@@ -413,6 +434,10 @@ static bool ob_cuvs_serialize(void *key, std::ostream &out, int &ret) {
     return true;
   }
   const uint64_t graph_bytes = static_cast<uint64_t>(::ftello(graph.file_));
+  if (graph_bytes > std::numeric_limits<size_t>::max()) {
+    ret = OB_ERR_VSAG_RETURN_ERROR;
+    return true;
+  }
   ::rewind(graph.file_);
   const int64_t build_us = ObTimeUtility::current_time() - start_us;
   const int32_t dim32 = ent->dim_;
@@ -429,15 +454,9 @@ static bool ob_cuvs_serialize(void *key, std::ostream &out, int &ret) {
     LOG_WARN("[OBVSAG][cuVS] failed to write snapshot stream", K(ret), KP(key), K(n));
     return true;
   }
-  std::vector<char> chunk(65536);
-  uint64_t remaining = graph_bytes;
-  while (remaining > 0) {
-    const size_t bytes = std::min<uint64_t>(remaining, chunk.size());
-    if (::fread(chunk.data(), 1, bytes, graph.file_) != bytes || !ob_cuvs_write(out, chunk.data(), bytes)) {
-      ret = OB_ERR_UNEXPECTED;
-      return true;
-    }
-    remaining -= bytes;
+  if (!write_cuvs_graph(out, graph.file_, static_cast<size_t>(graph_bytes))) {
+    ret = OB_ERR_UNEXPECTED;
+    return true;
   }
   LOG_INFO("[OBVSAG][cuVS] serialized GPU CAGRA snapshot", KP(key), K(n), K(dim32),
            K(built), K(build_us), K(graph_bytes));

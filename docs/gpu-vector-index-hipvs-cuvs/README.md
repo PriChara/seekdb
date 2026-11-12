@@ -126,6 +126,43 @@ validation comment rather than in the source tree.
 The no-GPU DDL contract remains covered by
 [`vector_index_cuvs_ddl.test`](../../tools/deploy/mysql_test/test_suite/vector_index/t/vector_index_cuvs_ddl.test).
 
+## V5 candidate validation
+
+This candidate reuses per-index device allocations and search parameters under
+a mutex. A warm query that fits the workspace avoids three device allocations
+and three frees. The snapshot writer streams from a file mapping and falls
+back to buffered reads if mapping fails. The snapshot layout and the V5 graph
+and search parameters are preserved.
+
+Run the CPU bridge contract check on Linux with a C++17 compiler:
+
+```bash
+test_dir=$(mktemp -d)
+trap 'rm -rf -- "$test_dir"' EXIT
+for header in cuvs/core/c_api.h cuvs/neighbors/cagra.h dlpack/dlpack.h cuda_runtime.h; do
+  mkdir -p "$test_dir/$(dirname "$header")"
+  touch "$test_dir/$header"
+done
+c++ -std=c++17 -O2 -pthread -Wall -Wextra -I"$test_dir" \
+  tools/hipvs_bridge/test_workspace.cpp -o "$test_dir/test_workspace"
+"$test_dir/test_workspace"
+```
+
+The check uses a fake GPU backend and covers buffer reuse, growth, allocation
+failure, search parameter reset, and handle cleanup.
+
+For a CPU/GPU build comparison, load the same vectors into two fresh tables
+without vector indexes and keep import time outside the measurement. Measure
+`CREATE VECTOR INDEX` plus the first fixed `APPROXIMATE LIMIT 10` query on each
+table. Use `lib=vsag` for CPU and `lib=cuvs` for GPU, with the same L2, HNSW,
+`m`, `ef_construction`, and `ef_search` settings. Use the same probe, check
+that each returns ten unique IDs, and record both wall times. Run
+`validation/run_ddl_persistence_smoke.sh` on a separate instance to check
+restart and CPU fallback. The official comparison pairs this candidate with
+V5 (`634888d9b`) on the same Radeon/ROCm installation and compares build time,
+Top-10 and Top-100 recall, and query QPS. GPU and comparative wall-time
+measurements are pending.
+
 ## Current limitations
 
 - Phase 1 supports dense float32 L2 indexes only.
