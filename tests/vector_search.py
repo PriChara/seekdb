@@ -47,6 +47,19 @@ def main():
             recall = total_recall / 24
             assert recall >= 0.95
             print(f'PASS: exact matches 24 independent TopK results, ANN recall={recall:.3f}, elapsed={time.perf_counter()-start:.3f}s')
+
+            query = "SELECT id FROM items WHERE category = 99 ORDER BY L2_DISTANCE(vec, '" + json.dumps(vectors[0]) + "') LIMIT 10"
+            assert db.execute(query, 'exact')['rows'] == []
+            db.execute('BEGIN', 'exact')
+            db.execute('UPDATE items SET category = 99 WHERE id = 0', 'exact')
+            assert db.execute(query, 'exact')['rows'] == [[0]]
+            db.execute('ROLLBACK', 'exact')
+            assert db.execute(query, 'exact')['rows'] == []
+            db.execute('UPDATE items SET category = 99 WHERE id = 0', 'exact')
+            assert db.execute(query, 'exact')['rows'] == [[0]]
+            db.execute('DELETE FROM items WHERE id = 0', 'exact')
+            assert db.execute(query, 'exact')['rows'] == []
+            print('PASS: equality buckets follow transaction visibility, rollback, updates and deletion')
         finally:
             db.log.close()
 

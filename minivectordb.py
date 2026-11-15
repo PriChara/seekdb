@@ -249,8 +249,34 @@ class Database:
         if table not in self.indexes:
             column = next(i for i, c in enumerate(schema['columns']) if c[1] == 'vector')
             entries = sorted((row[column][0], key) for key, row in self.log.rows(table))
-            self.indexes[table] = entries
+            self.indexes[table] = (entries, {})
         return self.indexes[table]
+
+    def indexed_candidates(self, name, schema, conditions):
+        entries, equality_columns = self.index(name, schema)
+        # Bound the auxiliary index to small tables and two low-cardinality
+        # columns. Each bucket keeps the original coordinate ordering.
+        if len(entries) > 16_384:
+            return entries
+        equality = next(((column, value) for column, op, value in conditions
+                         if op == '=' and column != schema['key']), None)
+        if equality is None:
+            return entries
+        column, value = equality
+        if column not in equality_columns:
+            if len(equality_columns) >= 2:
+                return entries
+            buckets = {}
+            for entry in entries:
+                _, key = entry
+                cell = self.log.read(self.log.offset(name, key))[column]
+                buckets.setdefault(cell, []).append(entry)
+                if len(buckets) > 64:
+                    buckets = None
+                    break
+            equality_columns[column] = buckets
+        buckets = equality_columns[column]
+        return entries if buckets is None else buckets.get(value, ())
 
     def stage(self, table, records):
         count = self.log.stage(table, records)
@@ -476,7 +502,9 @@ class Database:
                 order_value = projectors[output.index(ordering[0])]
             else:
                 order_value = bind(ordering)
-            if rank_expr[1] is not None and limit is not None and not descending and 'index' in schema:
+            uses_primary_key = any(column == schema['key'] and op == '=' for column, op, _ in conditions)
+            if (rank_expr[1] is not None and limit is not None
+                    and not descending and 'index' in schema and not uses_primary_key):
                 column = self.column(schema, rank_expr[0])
                 probe = vector(rank_expr[1], schema['columns'][column][2])
                 source = self.indexed_topk(name, schema, conditions, probe, order_value, limit, mode)
@@ -493,13 +521,13 @@ class Database:
     def indexed_topk(self, name, schema, conditions, probe, distance, limit, mode):
         if limit == 0:
             return []
-        entries = self.index(name, schema)
+        entries = self.indexed_candidates(name, schema, conditions)
         right = bisect.bisect_left(entries, (probe[0], -(1 << 63)))
         left = right - 1
         best = []
         # The coordinate gap is a lower bound on Euclidean distance. In ANN
         # mode only, permit a 0.1% distance approximation on larger indexes.
-        factor = 1.001 if mode == 'ann' and len(entries) > 256 else 1.0
+        factor = 1.001 if mode == 'ann' and len(self.index(name, schema)[0]) > 256 else 1.0
         while left >= 0 or right < len(entries):
             left_gap = probe[0] - entries[left][0] if left >= 0 else math.inf
             right_gap = entries[right][0] - probe[0] if right < len(entries) else math.inf
