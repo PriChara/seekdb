@@ -254,8 +254,8 @@ class Database:
 
     def indexed_candidates(self, name, schema, conditions):
         entries, equality_columns = self.index(name, schema)
-        # Bound the auxiliary index to small tables and two low-cardinality
-        # columns. Each bucket keeps the original coordinate ordering.
+        # Bound the auxiliary index to small tables and two columns. Each
+        # bucket keeps the original coordinate ordering and reuses its entries.
         if len(entries) > 16_384:
             return entries
         equality = next(((column, value) for column, op, value in conditions
@@ -263,6 +263,8 @@ class Database:
         if equality is None:
             return entries
         column, value = equality
+        if schema['columns'][column][2] > 128:
+            return entries
         if column not in equality_columns:
             if len(equality_columns) >= 2:
                 return entries
@@ -270,13 +272,18 @@ class Database:
             for entry in entries:
                 _, key = entry
                 cell = self.log.read(self.log.offset(name, key))[column]
-                buckets.setdefault(cell, []).append(entry)
-                if len(buckets) > 64:
-                    buckets = None
-                    break
+                bucket = buckets.get(cell)
+                if bucket is None:
+                    buckets[cell] = entry
+                elif isinstance(bucket, list):
+                    bucket.append(entry)
+                else:
+                    buckets[cell] = [bucket, entry]
             equality_columns[column] = buckets
-        buckets = equality_columns[column]
-        return entries if buckets is None else buckets.get(value, ())
+        bucket = equality_columns[column].get(value)
+        if bucket is None:
+            return ()
+        return bucket if isinstance(bucket, list) else (bucket,)
 
     def stage(self, table, records):
         count = self.log.stage(table, records)
@@ -540,7 +547,7 @@ class Database:
                 _, key = entries[right]
                 right += 1
             row = self.log.read(self.log.offset(name, key))
-            if matches(row, conditions):
+            if not conditions or matches(row, conditions):
                 item = (-distance(row), -key, row)
                 if len(best) < limit:
                     heapq.heappush(best, item)

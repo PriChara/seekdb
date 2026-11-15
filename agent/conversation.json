@@ -13,6 +13,10 @@
     {
       "role": "student",
       "content": "我们继续做加赛题吧，[https://oceanbase.yuque.com/org-wiki-obtech-vh7w9r/hc3pio/vzt7rbh4125g18wx](https://oceanbase.yuque.com/org-wiki-obtech-vh7w9r/hc3pio/vzt7rbh4125g18wx)在文档里有任何可以借助的东西，一定要和我获取"
+    },
+    {
+      "role": "student",
+      "content": "没有其他的内容了 我没有做过任何测试，你帮我多做一些测试，争取让这些都能高一点"
     }
   ],
   "experiments": [
@@ -39,6 +43,18 @@
     {
       "source": "2026-11-15 public mysqltest manifest via a local Windows pipe adapter",
       "output": "20/20 case assertions passed, including vector filters and ties, vector index maintenance, persistent restart, failed insert atomicity and shutdown rollback. The case assertions were the public ones. Docker and Linux resource limits were not exercised in this run."
+    },
+    {
+      "source": "Official round2 result screenshot provided by the student",
+      "output": "The first submission passed MySQL, E=372.812673, and its Agent Prompt result was invalid or under review per the platform message. The second reported MySQL pass, E=296.893996 and completed Agent Prompt raw score 0. The platform showed no breakdown of write/query time, I/O or memory. The student did not personally run tests."
+    },
+    {
+      "source": "Local tool execution, tests/benchmark_search.py, compared with 8abbdc10cf527979119df1532b99c970d9b50f86",
+      "output": "Three paired Windows runs, seeds 719–721, 10000 rows, 128 dimensions, 30 exact Top10 queries per group. Median previous→candidate milliseconds: high-cardinality equality 308.1→8.7, low-cardinality equality 67.8→62.0, unfiltered 1240.6→1231.1, primary key equality 2.5→2.7; durable writes 2885.3→2754.4. Log byte counts and result hashes agreed at every seed. Peak process resident memory was 73.15→73.98 MiB. This measures local process RSS and log size, not official cgroup memory or physical I/O."
+    },
+    {
+      "source": "Local tool execution, fallback and correctness checks",
+      "output": "Result hashes matched with 16500 rows beyond the auxiliary index size cap. 24 exact TopK results matched independent float32 ground truth. ANN recall was 1.000 on the local fixture. Unique and compound filters, rollback, committed changes, deletion, indexed restart, and two forced process exits passed."
     }
   ],
   "limitations": "本轮实现和上述实验由 Agent 执行。当前记录没有学生独立设计、解释实验或复盘的材料，也没有正式评测结果。"
