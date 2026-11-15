@@ -17,6 +17,7 @@
 #define USING_LOG_PREFIX LIB
 
 #include "ob_vsag_adaptor.h"
+#include "cagra_search_worker.h"
 #include <map>
 #include <set>
 #include <mutex>
@@ -281,13 +282,23 @@ static bool ob_cuvs_try_search(void *key, vsag::Allocator *alloc,
   const size_t n = ent->buf_ids_.size();
   const bool need_build =
       (n >= OB_CUVS_MIN_PTS && (ent->bridge_ == nullptr || n >= ent->built_n_ * 2));
+  if (!need_build && (ent->bridge_ == nullptr || ent->built_n_ != n)) { return false; }
   std::vector<unsigned> off(topk);
   std::vector<float> dst(topk);
   ObCuvsJob job{ent, query, topk, static_cast<int>(ent->dim_), n, need_build, &off, &dst, -1, false};
-  pthread_t tid; pthread_attr_t attr; pthread_attr_init(&attr);
-  pthread_attr_setstacksize(&attr, 32UL * 1024 * 1024);
-  if (pthread_create(&tid, &attr, ob_cuvs_job, &job) == 0) { pthread_join(tid, nullptr); }
-  pthread_attr_destroy(&attr);
+  // This path was already serialized by g_ob_cuvs_mu. Keep a large-stack
+  // worker alive across SQL queries to avoid creating a pthread per query.
+  static CagraSearchWorker worker;
+  if (!worker.run(ob_cuvs_job, &job)) {
+    pthread_attr_t attr;
+    if (pthread_attr_init(&attr) != 0) { return false; }
+    pthread_t tid;
+    const bool started = pthread_attr_setstacksize(&attr, 32UL * 1024 * 1024) == 0
+        && pthread_create(&tid, &attr, ob_cuvs_job, &job) == 0;
+    pthread_attr_destroy(&attr);
+    if (!started) { return false; }
+    pthread_join(tid, nullptr);
+  }
   if (job.built_) { ob_vsag_trace("cuvs_build", key, static_cast<long>(ent->dim_), static_cast<long>(n)); }
   if (ent->bridge_ == nullptr || job.rc_ != 0) { return false; }
   // Post-filter: cuVS returned UNFILTERED top-k. Apply the query's row filter
