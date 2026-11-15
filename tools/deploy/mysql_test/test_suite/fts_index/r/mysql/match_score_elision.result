@@ -49,6 +49,15 @@ hits	id_sum
 257	66690
 hits	varied_scores	positive_sum
 258	1	1
+# Count of a limited view observes cardinality and offset
+hits
+17
+hits
+8
+hits
+0
+id_sum
+1
 # Build an index over alternating document lengths and empty documents
 ids
 1,4

@@ -80,6 +80,15 @@ SELECT COUNT(*) AS hits,SUM(id) AS id_sum FROM
 SELECT COUNT(*) AS hits,MAX(score)>MIN(score) AS varied_scores,SUM(score)>0 AS positive_sum
   FROM (SELECT MATCH(body) AGAINST('alpha beta') AS score FROM perf_match_batches
         WHERE MATCH(body) AGAINST('alpha beta')) t;
+--echo # Count of a limited view observes cardinality and offset
+SELECT COUNT(*) AS hits FROM
+  (SELECT id FROM perf_match_batches WHERE MATCH(body) AGAINST('alpha beta') LIMIT 17) t;
+SELECT COUNT(*) AS hits FROM
+  (SELECT id FROM perf_match_batches WHERE MATCH(body) AGAINST('alpha beta') LIMIT 17 OFFSET 250) t;
+SELECT COUNT(*) AS hits FROM
+  (SELECT id FROM perf_match_batches WHERE MATCH(body) AGAINST('absentword') LIMIT 17) t;
+SELECT SUM(id) AS id_sum FROM
+  (SELECT id FROM perf_match_batches WHERE MATCH(body) AGAINST('alpha beta') ORDER BY id LIMIT 1) t;
 DROP TABLE perf_match_batches;
 DROP TABLE perf_match_semantics;
 --echo # Build an index over alternating document lengths and empty documents

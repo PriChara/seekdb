@@ -179,7 +179,7 @@ int ObTransformPreProcess::transform_one_stmt(common::ObIArray<ObParentDMLStmt> 
     }
     if (OB_SUCC(ret)) {
       if (stmt->get_match_exprs().count() > 0 &&
-          OB_FAIL(preserve_order_for_fulltext_search(stmt, is_happened))) {
+          OB_FAIL(preserve_order_for_fulltext_search(stmt, parent_stmts, is_happened))) {
       } else {
         trans_happened |= is_happened;
       }
@@ -3788,9 +3788,62 @@ int ObTransformPreProcess::do_flatten_conditions(ObDMLStmt *stmt, ObIArray<ObRaw
   return ret;
 }
 
-// full-text index queries on a single base table are processed with order preservation. 
+// The rank of a row cannot affect a plain count of a limited set. Require a
+// single direct consumer and simple expressions so early termination does
+// not remove observable expression evaluation or locking.
+static bool can_skip_implicit_fts_order(const ObDMLStmt &stmt,
+    const ObIArray<ObParentDMLStmt> &parent_stmts, const ObMatchFunRawExpr &match)
+{
+  if (parent_stmts.empty() || !stmt.is_select_stmt() || !stmt.has_limit()
+      || stmt.is_fetch_with_ties() || stmt.get_limit_percent_expr() != nullptr
+      || stmt.is_calc_found_rows() || stmt.has_for_update()
+      || stmt.get_condition_exprs().count() != 1
+      || match.get_mode_flag() != NATURAL_LANGUAGE_MODE
+      || match.get_search_key() == nullptr || !match.get_search_key()->is_const_raw_expr()) {
+    return false;
+  }
+  const ObRawExpr *filter = stmt.get_condition_exprs().at(0);
+  if (filter != &match && (filter == nullptr || filter->get_expr_type() != T_OP_BOOL || filter->get_param_count() != 1
+                          || filter->get_param_expr(0) != &match)) {
+    return false;
+  }
+  const ObSelectStmt &view = static_cast<const ObSelectStmt &>(stmt);
+  if (view.is_set_stmt() || view.has_having() || view.has_select_into()
+      || view.is_contains_assignment() || view.has_subquery()) {
+    return false;
+  }
+  for (int64_t i = 0; i < view.get_select_item_size(); ++i) {
+    const ObRawExpr *expr = view.get_select_item(i).expr_;
+    if (expr == nullptr || (!expr->is_column_ref_expr() && !expr->is_const_raw_expr())) {
+      return false;
+    }
+  }
+
+  const ObParentDMLStmt &consumer = parent_stmts.at(parent_stmts.count() - 1);
+  const ObDMLStmt *parent_stmt = consumer.stmt_;
+  if (consumer.pos_ != 0 || parent_stmt == nullptr || !parent_stmt->is_select_stmt()
+      || parent_stmt->get_table_items().count() != 1
+      || !parent_stmt->get_condition_exprs().empty() || parent_stmt->has_subquery()) {
+    return false;
+  }
+  const ObSelectStmt &parent = static_cast<const ObSelectStmt &>(*parent_stmt);
+  const TableItem *table = parent.get_table_item(0);
+  if (table == nullptr || !table->is_generated_table() || parent.is_set_stmt()
+      || table->ref_query_ != &stmt
+      || parent.get_group_expr_size() != 0 || parent.get_rollup_expr_size() != 0
+      || parent.has_having() || parent.has_window_function()
+      || parent.get_aggr_item_size() != 1 || parent.get_select_item_size() != 1) {
+    return false;
+  }
+  const ObRawExpr *count = parent.get_select_item(0).expr_;
+  return count != nullptr && count->get_expr_type() == T_FUN_COUNT
+      && count->get_param_count() == 0;
+}
+
+// full-text index queries on a single base table are processed with order preservation.
 // (Order is not preserved in multi-table join scenarios.)
-int ObTransformPreProcess::preserve_order_for_fulltext_search(ObDMLStmt *stmt, bool& trans_happened)
+int ObTransformPreProcess::preserve_order_for_fulltext_search(ObDMLStmt *stmt,
+    const ObIArray<ObParentDMLStmt> &parent_stmts, bool &trans_happened)
 {
   int ret = OB_SUCCESS;
   trans_happened = false;
@@ -3936,11 +3989,26 @@ int ObTransformPreProcess::preserve_order_for_fulltext_search(ObDMLStmt *stmt, b
       }
     }
   }
-  if (OB_SUCC(ret) && nullptr != match_expr && !static_cast<ObMatchFunRawExpr*>(match_expr)->is_es_match()) {
-    OrderItem item(match_expr, default_desc_direction());
-    if (OB_FAIL(stmt->add_order_item(item))) {
-    } else {
-      trans_happened = true;
+  if (OB_SUCC(ret) && match_expr != nullptr) {
+    const ObMatchFunRawExpr &match = *static_cast<ObMatchFunRawExpr *>(match_expr);
+    if (can_skip_implicit_fts_order(*stmt, parent_stmts, match)) {
+      // COUNT(*) does not consume the view's column values. A constant
+      // projection also lets the retrieval scan avoid the primary-key lookup.
+      ObConstRawExpr *one = nullptr;
+      if (OB_FAIL(ObRawExprUtils::build_const_int_expr(*ctx_->expr_factory_, ObIntType, 1, one))) {
+      } else {
+        ObSelectStmt &view = *static_cast<ObSelectStmt *>(stmt);
+        for (int64_t i = 0; i < view.get_select_item_size(); ++i) {
+          view.get_select_item(i).expr_ = one;
+        }
+        trans_happened = true;
+      }
+    } else if (!match.is_es_match()) {
+      OrderItem item(match_expr, default_desc_direction());
+      if (OB_FAIL(stmt->add_order_item(item))) {
+      } else {
+        trans_happened = true;
+      }
     }
   } 
   return ret;
