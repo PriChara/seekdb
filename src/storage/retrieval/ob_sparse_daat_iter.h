@@ -47,6 +47,20 @@ struct ObSRMergeCmp
   int cmp(const ObSRMergeItem &l, const ObSRMergeItem &r, int64_t &cmp_ret);
   int compare_ids(const ObDatum &left, const ObDatum &right, int &order) const
   {
+    if (is_binary_string_ && !left.is_null() && !right.is_null()) {
+      // Binary collation compares bytes and then lengths, including spaces.
+      // Keep the registered comparator for NULL and other datum metadata.
+      const int64_t common_length = MIN(left.len_, right.len_);
+      if (left.len_ == OB_DOC_ID_COLUMN_BYTE_LENGTH && right.len_ == OB_DOC_ID_COLUMN_BYTE_LENGTH) {
+        order = MEMCMP(left.ptr_, right.ptr_, OB_DOC_ID_COLUMN_BYTE_LENGTH);
+      } else {
+        order = common_length == 0 ? 0 : MEMCMP(left.ptr_, right.ptr_, common_length);
+      }
+      if (order == 0) {
+        order = (left.len_ > right.len_) - (left.len_ < right.len_);
+      }
+      return OB_SUCCESS;
+    }
     return cmp_func_(left, right, order, nullptr);
   }
 private:
@@ -61,6 +75,7 @@ private:
   // TODO: if memory lifetime of docid datum is guaranteed by dim_iters, we can use pointer to datum directly
   //       and avoid deep copy into merge heap here
   const ObFixedArray<const ObDatum *, ObIAllocator> *iter_ids_;
+  bool is_binary_string_;
   bool is_inited_;
 };
 

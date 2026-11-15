@@ -58,6 +58,13 @@ hits
 0
 id_sum
 1
+# Binary-key backfill preserves NULL and scattered changed bytes
+rows_total	non_null	checksum
+514	441	930453353483
+nulls
+73
+hits	id_sum
+2	512
 # Build an index over alternating document lengths and empty documents
 ids
 1,4

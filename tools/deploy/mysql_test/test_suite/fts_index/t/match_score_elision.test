@@ -89,6 +89,20 @@ SELECT COUNT(*) AS hits FROM
   (SELECT id FROM perf_match_batches WHERE MATCH(body) AGAINST('absentword') LIMIT 17) t;
 SELECT SUM(id) AS id_sum FROM
   (SELECT id FROM perf_match_batches WHERE MATCH(body) AGAINST('alpha beta') ORDER BY id LIMIT 1) t;
+--echo # Binary-key backfill preserves NULL and scattered changed bytes
+CREATE TABLE perf_binary_keys(id INT PRIMARY KEY, keyval VARBINARY(16));
+INSERT INTO perf_binary_keys
+  SELECT id,CASE WHEN MOD(id,7)=0 THEN NULL ELSE
+    UNHEX(CONCAT(LPAD(HEX(MOD(id,256)),2,'0'),REPEAT('AA',6),
+                 LPAD(HEX(MOD(id*13,256)),2,'0'),REPEAT('BB',8))) END
+  FROM perf_match_batches;
+CREATE INDEX bk ON perf_binary_keys(keyval);
+SELECT COUNT(*) AS rows_total,COUNT(keyval) AS non_null,SUM(CRC32(keyval)) AS checksum
+  FROM perf_binary_keys FORCE INDEX(bk);
+SELECT COUNT(*) AS nulls FROM perf_binary_keys FORCE INDEX(bk) WHERE keyval IS NULL;
+SELECT COUNT(*) AS hits,SUM(id) AS id_sum FROM perf_binary_keys FORCE INDEX(bk)
+  WHERE keyval>UNHEX('80') AND keyval<UNHEX('81');
+DROP TABLE perf_binary_keys;
 DROP TABLE perf_match_batches;
 DROP TABLE perf_match_semantics;
 --echo # Build an index over alternating document lengths and empty documents

@@ -571,6 +571,12 @@ int ObCharset::strcmpsp(ObCollationType collation_type,
                         bool cmp_endspace)
 {
   int result = 0;
+  // Repeated short general-ci keys need no repeated Unicode weight lookup.
+  if (str1_len == str2_len && str1_len >= 0 && str1 != nullptr && str2 != nullptr
+      && (str1 == str2 || (collation_type == CS_TYPE_UTF8MB4_GENERAL_CI
+          && str1_len <= 64 && MEMCMP(str1, str2, str1_len) == 0))) {
+    return 0;
+  }
   if (is_argument_valid(collation_type, str1, str1_len, str2, str2_len)) {
     const ObCharsetInfo *cs = get_charset(collation_type);
     result = cs->coll->strnncollsp(cs,

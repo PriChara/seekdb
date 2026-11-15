@@ -166,6 +166,48 @@ int ObStringDiffDecoder::batch_decode(
     } else if (OB_ISNULL(buf = static_cast<char *>(ctx.allocator_->alloc(buf_size * row_cap)))) {
       ret = OB_ALLOCATE_MEMORY_FAILED;
     } else {
+      if (ctx.is_fix_length() && string_size == OB_DOC_ID_COLUMN_BYTE_LENGTH
+          && !header_->is_hex_packing() && header_->length_ <= sizeof(uint32_t)) {
+        // The common bytes and changed positions are identical for the batch.
+        // Materialize the small ID template once, then patch each row's bytes.
+        char common_id[OB_DOC_ID_COLUMN_BYTE_LENGTH] = {};
+        uint8_t positions[sizeof(uint32_t)] = {};
+        int64_t position = 0;
+        int64_t changed_count = 0;
+        for (int64_t i = 0; i < header_->diff_desc_cnt_; ++i) {
+          const auto &description = header_->diff_descs_[i];
+          if (position + description.count_ > string_size) {
+            return OB_ERR_UNEXPECTED;
+          }
+          if (description.diff_) {
+            if (changed_count + description.count_ > sizeof(positions)) {
+              return OB_ERR_UNEXPECTED;
+            }
+            for (int64_t j = 0; j < description.count_; ++j) {
+              positions[changed_count++] = position + j;
+            }
+          }
+          position += description.count_;
+        }
+        if (position != string_size || changed_count > header_->length_) {
+          return OB_ERR_UNEXPECTED;
+        }
+        header_->copy_string(ObStringDiffHeader::LeftToRight(), std::logical_not<uint8_t>(),
+            header_->common_data(), common_id);
+        for (int64_t i = 0; i < row_cap; ++i) {
+          if (!ctx.has_extend_value() || !datums[i].is_null()) {
+            char *destination = buf + i * buf_size;
+            const unsigned char *cell = col_data + data_offset + row_ids[i] * header_->length_;
+            MEMCPY(destination, common_id, OB_DOC_ID_COLUMN_BYTE_LENGTH);
+            for (int64_t j = 0; j < changed_count; ++j) {
+              destination[positions[j]] = cell[j];
+            }
+            datums[i].pack_ = string_size;
+            datums[i].ptr_ = destination;
+          }
+        }
+        return OB_SUCCESS;
+      }
       for (int64_t i = 0; i < row_cap; ++i) {
         header_->copy_string(ObStringDiffHeader::LeftToRight(), std::logical_not<uint8_t>(),
             header_->common_data(), buf + i * buf_size);
