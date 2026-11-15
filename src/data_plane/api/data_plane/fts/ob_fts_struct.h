@@ -51,7 +51,10 @@ private:
   ObObjMeta meta_;
 };
 
-typedef common::hash::ObHashMap<ObFTWord, int64_t> ObFTWordMap;
+// A word map is owned by one segment invocation and is never shared between
+// parsing workers. Bucket latches add no protection to that local lifetime.
+typedef common::hash::ObHashMap<ObFTWord, int64_t,
+                              common::hash::NoPthreadDefendMode> ObFTWordMap;
 
 class ObAddWordFlag final
 {
