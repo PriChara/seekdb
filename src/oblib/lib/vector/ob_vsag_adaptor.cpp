@@ -84,9 +84,9 @@ namespace {
 struct ObCuvsEntry {
   std::shared_ptr<void> bridge_;// opaque handle from seekdb_cuvs_build
   int dim_ = 0;
-  std::vector<int64_t> ids_;    // CAGRA row offset -> external vid (of the built index)
   std::vector<float> buf_vecs_; // accumulated vectors (row-major) from add_index
-  std::vector<int64_t> buf_ids_;// accumulated external vids from add_index
+  // CAGRA row offsets use this append-only mapping once built_n_ matches its size.
+  std::vector<int64_t> buf_ids_;
   size_t built_n_ = 0;          // #vectors present when cuVS was last (re)built
   bool vsag_ready_ = false;     // CPU fallback is built only when it is needed
 };
@@ -161,7 +161,7 @@ static void ob_cuvs_register(void *key, const float *vectors, const int64_t *ids
   ent->dim_ = dim;
   ent->buf_vecs_.assign(vectors, vectors + static_cast<size_t>(dim) * size);
   ent->buf_ids_.assign(ids, ids + size);
-  if (ent->bridge_ != nullptr) { ent->ids_ = ent->buf_ids_; ent->built_n_ = size; }
+  if (ent->bridge_ != nullptr) { ent->built_n_ = size; }
   std::lock_guard<std::mutex> guard(g_ob_cuvs_mu);
   ObCuvsEntry *&slot = g_ob_cuvs_reg[key];
   delete slot;
@@ -208,7 +208,7 @@ static void *ob_cuvs_job(void *arg) {
     void *nb = seekdb_cuvs_build(j->ent->buf_vecs_.data(), static_cast<long>(j->n),
                                  static_cast<long>(j->dim));
     if (nb != nullptr) {
-      j->ent->bridge_ = ob_cuvs_wrap(nb); j->ent->built_n_ = j->n; j->ent->ids_ = j->ent->buf_ids_;
+      j->ent->bridge_ = ob_cuvs_wrap(nb); j->ent->built_n_ = j->n;
       j->built_ = true;
     }
   }
@@ -235,7 +235,7 @@ static void *ob_cuvs_batch_job(void *arg) {
     void *nb = seekdb_cuvs_build(j->ent->buf_vecs_.data(), static_cast<long>(j->n),
                                  static_cast<long>(j->ent->dim_));
     if (nb != nullptr) {
-      j->ent->bridge_ = ob_cuvs_wrap(nb); j->ent->built_n_ = j->n; j->ent->ids_ = j->ent->buf_ids_;
+      j->ent->bridge_ = ob_cuvs_wrap(nb); j->ent->built_n_ = j->n;
       j->built_ = true;
     }
   }
@@ -308,7 +308,7 @@ static bool ob_cuvs_try_search(void *key, vsag::Allocator *alloc,
   if (filter != nullptr) {
     FilterInterface *fi = static_cast<FilterInterface *>(filter);
     for (int64_t i = 0; i < topk; ++i) {
-      int64_t vid = (off[i] < ent->ids_.size()) ? static_cast<int64_t>(ent->ids_[off[i]]) : -1;
+      int64_t vid = (off[i] < n) ? ent->buf_ids_[off[i]] : -1;
       const bool valid = reverse_filter ? fi->test(vid) : !fi->test(vid);
       if (!valid) { return false; }
     }
@@ -324,11 +324,11 @@ static bool ob_cuvs_try_search(void *key, vsag::Allocator *alloc,
   }
   for (int64_t i = 0; i < topk; ++i) {
     unsigned o = off[i];
-    out_ids[i] = (o < ent->ids_.size()) ? ent->ids_[o] : -1;
+    out_ids[i] = (o < n) ? ent->buf_ids_[o] : -1;
     out_dist[i] = dst[i];
   }
   ids = out_ids; dist = out_dist; result_size = topk;
-  ob_vsag_trace("cuvs_serve", key, static_cast<long>(topk), static_cast<long>(ent->ids_.size()));
+  ob_vsag_trace("cuvs_serve", key, static_cast<long>(topk), static_cast<long>(n));
   return true;
 }
 
@@ -434,7 +434,7 @@ static bool ob_cuvs_serialize(void *key, std::ostream &out, int &ret) {
                K(ret), KP(key), K(n), K(ent->dim_));
       return true;
     }
-    ent->bridge_ = nb; ent->built_n_ = n; ent->ids_ = ent->buf_ids_;
+    ent->bridge_ = nb; ent->built_n_ = n;
     built = true;
   }
   ObCuvsSnapshotFile graph;
@@ -524,7 +524,6 @@ static int ob_cuvs_deserialize(void *key, int expected_dim, std::istream &in) {
       }
       ent->bridge_ = ob_cuvs_wrap(job.handle_);
       ent->built_n_ = n;
-      ent->ids_ = ent->buf_ids_;
       {
         std::lock_guard<std::mutex> guard(g_ob_cuvs_mu);
         ObCuvsEntry *&slot = g_ob_cuvs_reg[key];
@@ -2126,7 +2125,7 @@ long cuvs_knn_search_batch(void *key, const float *queries, long nq, long topk,
     for (long i = 0; i < topk; ++i) {
       const size_t p = static_cast<size_t>(q) * topk + i;
       const unsigned o = off[p];
-      out_ids[p] = (o < ent->ids_.size()) ? ent->ids_[o] : -1;
+      out_ids[p] = (o < n) ? ent->buf_ids_[o] : -1;
       out_dist[p] = dst[p];
     }
   }
