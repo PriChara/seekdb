@@ -528,6 +528,12 @@ class Database:
     def indexed_topk(self, name, schema, conditions, probe, distance, limit, mode):
         if limit == 0:
             return []
+        # A single-coordinate bound prunes little in high dimensions. For an
+        # unfiltered query, sequential row access avoids index traversal costs.
+        if not conditions and len(probe) >= 32:
+            return heapq.nsmallest(
+                limit, self.log.rows(name),
+                key=lambda item: (distance(item[1]), item[0]))
         entries = self.indexed_candidates(name, schema, conditions)
         right = bisect.bisect_left(entries, (probe[0], -(1 << 63)))
         left = right - 1
