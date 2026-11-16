@@ -131,13 +131,14 @@ The no-GPU DDL contract remains covered by
 This candidate reuses per-index device allocations and search parameters under
 a mutex. A warm query that fits the workspace avoids three device allocations
 and three frees. The snapshot writer streams from a file mapping and falls
-back to buffered reads if mapping fails. NN-Descent retains 160 candidate edges and 128
-final edges per vector. This candidate lowers the refinement limit from 80
-to 72 iterations. The adaptor reuses the buffered row ID mapping and avoids
-temporary heap allocations for single queries requesting up to 128 results.
+back to buffered reads if mapping fails. NN-Descent retains 128 final edges
+per vector. Builds with at least 32,768 rows and 128 dimensions refine 144
+candidate edges for up to 48 iterations. Other builds refine 160 candidate
+edges for up to 72 iterations. The adaptor reuses the buffered row ID mapping
+and avoids temporary heap allocations for single queries requesting up to 128 results.
 GPU results still require the built index to cover the entire current buffer.
 
-In standalone Radeon Cloud tests with 50,000 synthetic 256-dimensional
+In earlier standalone Radeon Cloud tests with 50,000 synthetic 256-dimensional
 vectors, median construction time decreased from 11.95 to 9.38 seconds for
 the normalized random dataset and from 9.23 to 9.17 seconds for the clustered
 dataset (two builds per configuration). After snapshot save and reload,

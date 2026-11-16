@@ -27,6 +27,7 @@ struct DLManagedTensor { Tensor dl_tensor; void (*deleter)(DLManagedTensor*); };
 struct cuvsFilter { int type; uintptr_t addr; };
 static std::set<void*> allocations;
 static int alloc_calls, parameter_calls, fail_alloc;
+static int candidate_degree, refinement_iterations;
 static size_t observed_itopk;
 static int cuvsResourcesCreate(int* r) { *r=1; return 0; }
 static int cuvsResourcesDestroy(int) { return 0; }
@@ -37,7 +38,8 @@ static int cuvsCagraIndexCreate(Index** p) { *p=new Index{}; return 0; }
 static int cuvsCagraIndexDestroy(Index* p) { delete p; return 0; }
 static int cuvsCagraBuild(int,Params* params,DLManagedTensor* t,Index* i) {
   assert(params->build_algo==NN_DESCENT && params->graph_degree==128);
-  assert(params->intermediate_graph_degree==160 && params->nn_descent_niter==72);
+  candidate_degree=params->intermediate_graph_degree;
+  refinement_iterations=params->nn_descent_niter;
   i->n=t->dl_tensor.shape[0]; i->dim=t->dl_tensor.shape[1]; return 0;
 }
 static int cuvsRMMAlloc(int,void** p,size_t n) {
@@ -98,6 +100,7 @@ static int cuvsCagraIndexGetDataset(Index* i,DLManagedTensor* view) {
 int main() {
   float base[2000]={}; float query[8]={}; unsigned ids[800]={}; float dist[800]={};
   void* h=seekdb_cuvs_build(base,1000,2); assert(h);
+  assert(candidate_degree==160 && refinement_iterations==72);
   assert(seekdb_cuvs_search(h,query,1,10,ids,dist)==0);
   assert(alloc_calls==3 && parameter_calls==1 && ids[9]==9 && dist[9]==9);
   for (int i=0;i<5;++i) assert(seekdb_cuvs_search(h,query,1,10,ids,dist)==0);
@@ -126,5 +129,15 @@ int main() {
   invalid_dataset_stride=true;
   assert(seekdb_cuvs_copy_vectors(h,recovered,1000,2)!=0 && dataset_views_released==2);
   seekdb_cuvs_free(h); assert(allocations.empty());
+  // The fake backend records graph parameters without accessing the dataset.
+  h=seekdb_cuvs_build(base,32768,127); assert(h);
+  assert(candidate_degree==160 && refinement_iterations==72);
+  seekdb_cuvs_free(h);
+  h=seekdb_cuvs_build(base,32767,128); assert(h);
+  assert(candidate_degree==160 && refinement_iterations==72);
+  seekdb_cuvs_free(h);
+  h=seekdb_cuvs_build(base,32768,128); assert(h);
+  assert(candidate_degree==144 && refinement_iterations==48);
+  seekdb_cuvs_free(h);
   std::puts("CPU contract checks passed (not a GPU benchmark)");
 }
