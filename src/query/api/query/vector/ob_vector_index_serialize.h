@@ -55,6 +55,7 @@ public:
   {
     virtual ~CbParam() = default;
   };
+  // The pointer is borrowed for the duration of the callback.
   using Callback = ObFunction<int(const char *, const int64_t, CbParam &)>;
   explicit ObOStreamBuf(char *data, const int64_t capacity, CbParam &cb_param, Callback &cb)
     : ObStreamBuf(data, capacity),

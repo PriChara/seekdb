@@ -40,6 +40,13 @@ std::streamsize ObOStreamBuf::xsputn(const char* s, std::streamsize count)
   }
   while (is_valid() && is_success() && written_size < count) {
     left_size = epptr() - pptr();
+    // Full chunks can go straight to the synchronous callback. Keep the
+    // last chunk buffered so subsequent writes use the same LOB boundaries.
+    if (pptr() == pbase() && left_size > 0 && count - written_size > left_size) {
+      last_error_code_ = cb_(s + written_size, left_size, cb_param_);
+      written_size += left_size;
+      continue;
+    }
     std::streamsize sub_size = std::min(count - written_size, left_size);
     MEMCPY(pptr(), s + written_size, sub_size);
     pbump(static_cast<int>(sub_size));
