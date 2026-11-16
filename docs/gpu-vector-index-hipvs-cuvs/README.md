@@ -140,6 +140,13 @@ fell from 9.28 to 7.52 seconds. Median Recall@10 was 0.9975 in both runs
 and Recall@100 was 0.9951 and 0.9950, respectively. Measure end-to-end build
 time and recall against the frozen V5 baseline on AMD hardware.
 
+For medium-sized datasets (16,384–131,072 rows, dimension at least 128 and
+divisible by 64), the bridge first tries IVF-PQ with exact reranking to
+generate a wider set of candidates for CAGRA pruning. The resulting CAGRA
+index still stores float32 vectors and 128 final edges. If this build fails,
+the bridge retries with the 64-iteration NN-Descent configuration on a fresh
+handle. Other shapes continue to use NN-Descent.
+
 Run the CPU bridge contract check on Linux with a C++17 compiler:
 
 ```bash
