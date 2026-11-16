@@ -55,14 +55,17 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
   dset.dl_tensor.dtype.code = kDLFloat; dset.dl_tensor.dtype.bits = 32; dset.dl_tensor.dtype.lanes = 1;
   dset.dl_tensor.shape = ds; dset.dl_tensor.strides = 0; dset.dl_tensor.byte_offset = 0;
 
-  /* Limit expensive distance refinements for large, wide datasets while
-   * retaining the final graph degree. */
+  /* Keep the final graph degree and give larger graphs more refinement
+   * rounds to preserve recall. */
   const int compact_candidates = n >= 32768 && dim >= 128;
   if (cuvsCagraIndexParamsCreate(&h->ip) != CUVS_SUCCESS) goto fail_res;
   h->ip->build_algo = NN_DESCENT;
   h->ip->graph_degree = 128;
   h->ip->intermediate_graph_degree = compact_candidates ? 144 : 160;
-  h->ip->nn_descent_niter = compact_candidates ? 28 : 72;
+  h->ip->nn_descent_niter = 72;
+  if (compact_candidates) {
+    h->ip->nn_descent_niter = n <= 65536 ? 28 : 36;
+  }
   if (cuvsCagraIndexCreate(&h->idx)      != CUVS_SUCCESS) goto fail_ip;
   if (cuvsCagraBuild(h->res, h->ip, &dset, h->idx) != CUVS_SUCCESS) goto fail_idx;
   h->n = n; h->dim = dim;
