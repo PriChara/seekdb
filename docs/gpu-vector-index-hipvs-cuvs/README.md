@@ -147,8 +147,10 @@ end-to-end build time and recall against the frozen V5 baseline on AMD hardware.
 
 Offline GPU index builds now write `OBCUVS03` snapshots. The snapshot stores
 row IDs followed by the hipVS payload, which already contains the original
-float32 vectors. On load, the bridge copies the vectors from the restored
-GPU index in row order for incremental updates and CPU fallback.
+float32 vectors. Reload and GPU queries use the restored index directly
+without allocating a host vector buffer. An append recovers the vectors
+in row order before adding new rows. A CPU fallback reads the vectors into
+its build input without retaining a second host buffer in the GPU index.
 The reader also accepts `OBCUVS02` snapshots, which stored a second copy
 of the vectors outside the hipVS payload. Earlier binaries cannot read V3
 and require rebuilding affected indexes before downgrading.
