@@ -133,9 +133,12 @@ a mutex. A warm query that fits the workspace avoids three device allocations
 and three frees. The snapshot writer streams from a file mapping and falls
 back to buffered reads if mapping fails. The snapshot layout and search
 parameters are preserved. NN-Descent retains 160 candidate edges and 128
-final edges per vector. This candidate lowers the refinement limit from 100
-to 80 iterations. Measure build time and recall against the frozen V5
-baseline on AMD hardware.
+final edges per vector. This candidate lowers the refinement limit from 80
+to 64 iterations. In the standalone hipVS benchmark on Radeon Cloud, using
+two sets of 50,000 synthetic 256-dimensional vectors, median build time
+fell from 9.28 to 7.52 seconds. Median Recall@10 was 0.9975 in both runs
+and Recall@100 was 0.9951 and 0.9950, respectively. Measure end-to-end build
+time and recall against the frozen V5 baseline on AMD hardware.
 
 Run the CPU bridge contract check on Linux with a C++17 compiler:
 
