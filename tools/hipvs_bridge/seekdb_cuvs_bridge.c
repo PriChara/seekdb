@@ -38,34 +38,6 @@ static int sk_reserve(sk_cuvs_index* h, void** buffer, size_t* capacity, size_t 
   return 0;
 }
 
-/* The PQ index only proposes neighbors for the graph builder. CAGRA keeps
- * the original float32 vectors for search and snapshot serialization. */
-static cuvsError_t sk_build_ivf_graph(sk_cuvs_index* h, DLManagedTensor* dataset)
-{
-  struct cuvsIvfPqParams pq = {NULL, NULL, 2.0f};
-  cuvsError_t result = cuvsIvfPqIndexParamsCreate(&pq.ivf_pq_build_params);
-  if (result == CUVS_SUCCESS) {
-    result = cuvsIvfPqSearchParamsCreate(&pq.ivf_pq_search_params);
-    if (result == CUVS_SUCCESS) {
-      pq.ivf_pq_build_params->n_lists = 64;
-      pq.ivf_pq_build_params->pq_dim = 64;
-      pq.ivf_pq_search_params->n_probes = 32;
-      /* Give pruning enough candidates to find links across dense groups. */
-      const size_t previous_degree = h->ip->intermediate_graph_degree;
-      h->ip->intermediate_graph_degree = 256;
-      h->ip->build_algo = IVF_PQ;
-      h->ip->graph_build_params = &pq;
-      result = cuvsCagraBuild(h->res, h->ip, dataset, h->idx);
-      h->ip->graph_build_params = NULL;
-      h->ip->build_algo = NN_DESCENT;
-      h->ip->intermediate_graph_degree = previous_degree;
-      cuvsIvfPqSearchParamsDestroy(pq.ivf_pq_search_params);
-    }
-    cuvsIvfPqIndexParamsDestroy(pq.ivf_pq_build_params);
-  }
-  return result;
-}
-
 void* seekdb_cuvs_build(const float* base, long n, long dim)
 {
   sk_cuvs_index* h = (sk_cuvs_index*)calloc(1, sizeof(*h));
@@ -87,20 +59,9 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
   h->ip->graph_degree = 128;
   /* Shorten refinement while retaining the candidate and final graph widths. */
   h->ip->intermediate_graph_degree = 160;
-  h->ip->nn_descent_niter = 64;
+  h->ip->nn_descent_niter = 72;
   if (cuvsCagraIndexCreate(&h->idx)      != CUVS_SUCCESS) goto fail_ip;
-  /* Keep 256–2048 vectors per IVF list for this preset, and use PQ only
-   * when the 64 subquantizers divide the vector dimension exactly. */
-  if (n >= 16384 && n <= 131072 && dim >= 128 && dim % 64 == 0) {
-    if (sk_build_ivf_graph(h, &dset) != CUVS_SUCCESS) {
-      cuvsCagraIndexDestroy(h->idx);
-      h->idx = NULL;
-      if (cuvsCagraIndexCreate(&h->idx) != CUVS_SUCCESS) goto fail_ip;
-      if (cuvsCagraBuild(h->res, h->ip, &dset, h->idx) != CUVS_SUCCESS) goto fail_idx;
-    }
-  } else if (cuvsCagraBuild(h->res, h->ip, &dset, h->idx) != CUVS_SUCCESS) {
-    goto fail_idx;
-  }
+  if (cuvsCagraBuild(h->res, h->ip, &dset, h->idx) != CUVS_SUCCESS) goto fail_idx;
   h->n = n; h->dim = dim;
   return h;
 
