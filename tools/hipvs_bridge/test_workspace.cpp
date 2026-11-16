@@ -22,7 +22,8 @@ struct Device { int device_type, device_id; };
 struct Dtype { int code, bits, lanes; };
 struct Tensor { void* data; Device device; int ndim; Dtype dtype;
                 long* shape; long* strides; size_t byte_offset; };
-struct DLManagedTensor { Tensor dl_tensor; };
+using DLTensor = Tensor;
+struct DLManagedTensor { Tensor dl_tensor; void (*deleter)(DLManagedTensor*); };
 struct cuvsFilter { int type; uintptr_t addr; };
 static std::set<void*> allocations;
 static int alloc_calls, parameter_calls, fail_alloc;
@@ -51,6 +52,13 @@ static int cuvsRMMFree(int,void* p,size_t) {
 static int cudaMemcpy(void* dst,const void* src,size_t n,int) {
   std::memcpy(dst,src,n); return 0;
 }
+static int cudaMemcpy2D(void* dst,size_t dpitch,const void* src,size_t spitch,
+                        size_t width,size_t height,int) {
+  for (size_t row=0;row<height;++row) {
+    std::memcpy(static_cast<char*>(dst)+row*dpitch,static_cast<const char*>(src)+row*spitch,width);
+  }
+  return 0;
+}
 static int cuvsCagraSearchParamsCreate(SearchParams** p) {
   ++parameter_calls; *p=new SearchParams{64,1}; return 0;
 }
@@ -69,6 +77,21 @@ static int cuvsCagraSerialize(int,const char*,Index*,bool) { return 0; }
 static int cuvsCagraDeserialize(int,const char*,Index* i) { i->n=1000;i->dim=2;return 0; }
 static int cuvsCagraIndexGetSize(Index* i,int64_t* n) { *n=i->n;return 0; }
 static int cuvsCagraIndexGetDims(Index* i,int64_t* d) { *d=i->dim;return 0; }
+static int dataset_views_released;
+static bool invalid_dataset_stride;
+static int cuvsCagraIndexGetDataset(Index* i,DLManagedTensor* view) {
+  static float padded[4001]={};
+  static long shape[2], strides[2]={4,1};
+  shape[0]=i->n; shape[1]=i->dim;
+  strides[1]=invalid_dataset_stride ? 2 : 1;
+  for (long row=0;row<i->n;++row) {
+    padded[1+row*4]=float(row);
+    padded[2+row*4]=float(-row);
+  }
+  view->dl_tensor={padded,{kDLCUDA,0},2,{kDLFloat,32,1},shape,strides,sizeof(float)};
+  view->deleter=[](DLManagedTensor*) { ++dataset_views_released; };
+  return 0;
+}
 
 #include "seekdb_cuvs_bridge.c"
 
@@ -93,6 +116,15 @@ int main() {
   seekdb_cuvs_free(h); assert(allocations.empty());
   h=seekdb_cuvs_deserialize("unused",1000,2); assert(h);
   assert(seekdb_cuvs_search(h,query,1,10,ids,dist)==0);
+  float recovered[2000];
+  assert(seekdb_cuvs_copy_vectors(h,recovered,1000,2)==0);
+  for (int row=0;row<1000;++row) {
+    assert(recovered[2*row]==row && recovered[2*row+1]==-row);
+  }
+  assert(dataset_views_released==1);
+  assert(seekdb_cuvs_copy_vectors(h,recovered,999,2)!=0);
+  invalid_dataset_stride=true;
+  assert(seekdb_cuvs_copy_vectors(h,recovered,1000,2)!=0 && dataset_views_released==2);
   seekdb_cuvs_free(h); assert(allocations.empty());
   std::puts("CPU contract checks passed (not a GPU benchmark)");
 }

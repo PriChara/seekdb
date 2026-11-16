@@ -131,8 +131,7 @@ The no-GPU DDL contract remains covered by
 This candidate reuses per-index device allocations and search parameters under
 a mutex. A warm query that fits the workspace avoids three device allocations
 and three frees. The snapshot writer streams from a file mapping and falls
-back to buffered reads if mapping fails. The snapshot layout and search
-parameters are preserved. NN-Descent retains 160 candidate edges and 128
+back to buffered reads if mapping fails. NN-Descent retains 160 candidate edges and 128
 final edges per vector. This candidate lowers the refinement limit from 80
 to 72 iterations. The adaptor reuses the buffered row ID mapping and avoids
 temporary heap allocations for single queries requesting up to 128 results.
@@ -145,6 +144,14 @@ dataset (two builds per configuration). After snapshot save and reload,
 Recall@100 was about 0.994 on the random data and 0.991–0.992 on clustered
 data. Median single-query search times were broadly unchanged. Measure
 end-to-end build time and recall against the frozen V5 baseline on AMD hardware.
+
+Offline GPU index builds now write `OBCUVS03` snapshots. The snapshot stores
+row IDs followed by the hipVS payload, which already contains the original
+float32 vectors. On load, the bridge copies the vectors from the restored
+GPU index in row order for incremental updates and CPU fallback.
+The reader also accepts `OBCUVS02` snapshots, which stored a second copy
+of the vectors outside the hipVS payload. Earlier binaries cannot read V3
+and require rebuilding affected indexes before downgrading.
 
 Run the CPU bridge contract check on Linux with a C++17 compiler:
 
@@ -178,8 +185,8 @@ measurements are pending.
 ## Current limitations
 
 - Phase 1 supports dense float32 L2 indexes only.
-- GPU indexes are process-local and rebuilt lazily; persistence and cache reuse
-  are follow-up work.
+- Offline GPU DDL persists the graph. The incremental path can rebuild it
+  on demand.
 - The explicit batch API rebuilds its CAGRA index per call.
 - GPU validation is manual because upstream CI has no compatible GPU runner.
 - Multi-GPU, long-duration, and snapshot-reload coverage are out of scope for

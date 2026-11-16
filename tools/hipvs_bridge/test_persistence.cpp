@@ -8,7 +8,7 @@ int main(int argc, char **argv)
 {
   if (argc != 3) return 2;
   const long count = 10000;
-  const long dimension = 32;
+  const long dimension = 127; // Exercise the padding added by the GPU layout.
   std::vector<float> vectors(count * dimension);
   for (long row = 0; row < count; ++row) {
     for (long column = 0; column < dimension; ++column) {
@@ -26,6 +26,12 @@ int main(int argc, char **argv)
     if (invalid) { seekdb_cuvs_free(invalid); return 7; }
     index = seekdb_cuvs_deserialize(argv[2], count, dimension);
     if (!index) return 4;
+    std::vector<float> recovered(vectors.size());
+    if (seekdb_cuvs_copy_vectors(index, recovered.data(), count, dimension) != 0 ||
+        std::memcmp(vectors.data(), recovered.data(), vectors.size() * sizeof(float)) != 0) {
+      seekdb_cuvs_free(index);
+      return 8;
+    }
   }
   unsigned int ids[10];
   float distances[10];

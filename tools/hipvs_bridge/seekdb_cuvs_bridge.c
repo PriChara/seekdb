@@ -185,6 +185,45 @@ fail:
   return NULL;
 }
 
+int seekdb_cuvs_copy_vectors(void* handle, float* out, long n, long dim)
+{
+  sk_cuvs_index* h = (sk_cuvs_index*)handle;
+  if (!h || !out || n <= 0 || dim <= 0 || n != h->n || dim != h->dim ||
+      (uint64_t)dim > SIZE_MAX / sizeof(float) / (uint64_t)n ||
+      pthread_mutex_lock(&h->search_mutex) != 0) return 1;
+
+  int rc = 1;
+  DLManagedTensor view;
+  view.deleter = NULL;
+  if (cuvsCagraIndexGetDataset(h->idx, &view) == CUVS_SUCCESS) {
+    const DLTensor* t = &view.dl_tensor;
+    if (t->data && t->shape && t->ndim == 2 && t->shape[0] == n &&
+        t->shape[1] == dim && t->dtype.code == kDLFloat &&
+        t->dtype.bits == 32 && t->dtype.lanes == 1 &&
+        (!t->strides || (t->strides[0] >= dim && t->strides[1] == 1)) &&
+        t->byte_offset <= SIZE_MAX) {
+      const size_t width = (size_t)dim * sizeof(float);
+      const uint64_t stride = t->strides ? (uint64_t)t->strides[0] : (uint64_t)dim;
+      if (stride <= (SIZE_MAX - (size_t)t->byte_offset) / sizeof(float) / (uint64_t)n) {
+        const void* data = (const char*)t->data + (size_t)t->byte_offset;
+        if (stride == (uint64_t)dim) {
+          rc = cudaMemcpy(out, data, width * (size_t)n, cudaMemcpyDefault) != cudaSuccess;
+        } else {
+          const size_t pitch = (size_t)stride * sizeof(float);
+#ifdef __HIP_PLATFORM_AMD__
+          rc = hipMemcpy2D(out, width, data, pitch, width, (size_t)n, hipMemcpyDefault) != hipSuccess;
+#else
+          rc = cudaMemcpy2D(out, width, data, pitch, width, (size_t)n, cudaMemcpyDefault) != cudaSuccess;
+#endif
+        }
+      }
+    }
+  }
+  if (view.deleter) view.deleter(&view);
+  pthread_mutex_unlock(&h->search_mutex);
+  return rc;
+}
+
 int seekdb_cuvs_cagra_knn(const float* base, long n, long dim,
                           const float* query, long nq, long topk,
                           unsigned int* out_ids)
