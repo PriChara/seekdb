@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <string.h>
 #include <pthread.h>
 
 typedef struct {
@@ -61,7 +62,7 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
   h->ip->build_algo = NN_DESCENT;
   h->ip->graph_degree = 128;
   h->ip->intermediate_graph_degree = compact_candidates ? 144 : 160;
-  h->ip->nn_descent_niter = compact_candidates ? 36 : 72;
+  h->ip->nn_descent_niter = compact_candidates ? 28 : 72;
   if (cuvsCagraIndexCreate(&h->idx)      != CUVS_SUCCESS) goto fail_ip;
   if (cuvsCagraBuild(h->res, h->ip, &dset, h->idx) != CUVS_SUCCESS) goto fail_idx;
   h->n = n; h->dim = dim;
@@ -187,6 +188,36 @@ fail:
   return NULL;
 }
 
+#ifdef __HIP_PLATFORM_AMD__
+// Read contiguous batches from the device and strip the row padding on the host.
+// ROCm can return incomplete data when using hipMemcpy2D into pageable memory.
+static int sk_copy_padded_rows(char* out, const char* data, size_t n, size_t width, size_t pitch)
+{
+  const size_t tile_bytes = 1024 * 1024;
+  size_t tile_rows = tile_bytes / pitch;
+  if (tile_rows == 0) tile_rows = 1;
+  if (tile_rows > n) tile_rows = n;
+  char* tile = (char*)malloc((tile_rows - 1) * pitch + width);
+  if (!tile) return 1;
+
+  int rc = 0;
+  for (size_t start = 0; start < n; start += tile_rows) {
+    const size_t left = n - start;
+    const size_t rows = left < tile_rows ? left : tile_rows;
+    const size_t bytes = (rows - 1) * pitch + width;
+    if (hipMemcpy(tile, data + start * pitch, bytes, hipMemcpyDeviceToHost) != hipSuccess) {
+      rc = 1;
+      break;
+    }
+    for (size_t row = 0; row < rows; ++row) {
+      memcpy(out + (start + row) * width, tile + row * pitch, width);
+    }
+  }
+  free(tile);
+  return rc;
+}
+#endif
+
 int seekdb_cuvs_copy_vectors(void* handle, float* out, long n, long dim)
 {
   sk_cuvs_index* h = (sk_cuvs_index*)handle;
@@ -196,7 +227,8 @@ int seekdb_cuvs_copy_vectors(void* handle, float* out, long n, long dim)
 
   int rc = 1;
   DLManagedTensor view;
-  view.deleter = NULL;
+  // hipVS versions can leave byte_offset unset for a dataset view.
+  memset(&view, 0, sizeof(view));
   if (cuvsCagraIndexGetDataset(h->idx, &view) == CUVS_SUCCESS) {
     const DLTensor* t = &view.dl_tensor;
     if (t->data && t->shape && t->ndim == 2 && t->shape[0] == n &&
@@ -213,7 +245,7 @@ int seekdb_cuvs_copy_vectors(void* handle, float* out, long n, long dim)
         } else {
           const size_t pitch = (size_t)stride * sizeof(float);
 #ifdef __HIP_PLATFORM_AMD__
-          rc = hipMemcpy2D(out, width, data, pitch, width, (size_t)n, hipMemcpyDefault) != hipSuccess;
+          rc = sk_copy_padded_rows((char*)out, (const char*)data, (size_t)n, width, pitch);
 #else
           rc = cudaMemcpy2D(out, width, data, pitch, width, (size_t)n, cudaMemcpyDefault) != cudaSuccess;
 #endif

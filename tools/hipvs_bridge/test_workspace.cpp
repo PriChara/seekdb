@@ -81,6 +81,7 @@ static int cuvsCagraIndexGetSize(Index* i,int64_t* n) { *n=i->n;return 0; }
 static int cuvsCagraIndexGetDims(Index* i,int64_t* d) { *d=i->dim;return 0; }
 static int dataset_views_released;
 static bool invalid_dataset_stride;
+static bool omit_dataset_offset;
 static int cuvsCagraIndexGetDataset(Index* i,DLManagedTensor* view) {
   static float padded[4001]={};
   static long shape[2], strides[2]={4,1};
@@ -90,7 +91,18 @@ static int cuvsCagraIndexGetDataset(Index* i,DLManagedTensor* view) {
     padded[1+row*4]=float(row);
     padded[2+row*4]=float(-row);
   }
-  view->dl_tensor={padded,{kDLCUDA,0},2,{kDLFloat,32,1},shape,strides,sizeof(float)};
+  if (omit_dataset_offset) {
+    assert(view->dl_tensor.byte_offset==0);
+    view->dl_tensor.data=padded+1;
+  } else {
+    view->dl_tensor.data=padded;
+    view->dl_tensor.byte_offset=sizeof(float);
+  }
+  view->dl_tensor.device={kDLCUDA,0};
+  view->dl_tensor.ndim=2;
+  view->dl_tensor.dtype={kDLFloat,32,1};
+  view->dl_tensor.shape=shape;
+  view->dl_tensor.strides=strides;
   view->deleter=[](DLManagedTensor*) { ++dataset_views_released; };
   return 0;
 }
@@ -125,9 +137,14 @@ int main() {
     assert(recovered[2*row]==row && recovered[2*row+1]==-row);
   }
   assert(dataset_views_released==1);
+  omit_dataset_offset=true;
+  assert(seekdb_cuvs_copy_vectors(h,recovered,1000,2)==0);
+  for (int row=0;row<1000;++row) {
+    assert(recovered[2*row]==row && recovered[2*row+1]==-row);
+  }
   assert(seekdb_cuvs_copy_vectors(h,recovered,999,2)!=0);
   invalid_dataset_stride=true;
-  assert(seekdb_cuvs_copy_vectors(h,recovered,1000,2)!=0 && dataset_views_released==2);
+  assert(seekdb_cuvs_copy_vectors(h,recovered,1000,2)!=0 && dataset_views_released==3);
   seekdb_cuvs_free(h); assert(allocations.empty());
   // The fake backend records graph parameters without accessing the dataset.
   h=seekdb_cuvs_build(base,32768,127); assert(h);
@@ -137,7 +154,7 @@ int main() {
   assert(candidate_degree==160 && refinement_iterations==72);
   seekdb_cuvs_free(h);
   h=seekdb_cuvs_build(base,32768,128); assert(h);
-  assert(candidate_degree==144 && refinement_iterations==36);
+  assert(candidate_degree==144 && refinement_iterations==28);
   seekdb_cuvs_free(h);
   std::puts("CPU contract checks passed (not a GPU benchmark)");
 }
