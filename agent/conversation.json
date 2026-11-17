@@ -1,14 +1,20 @@
 {
   "synthetic": false,
-  "scope": "MiniVectorDB 加赛第一版本，保留本轮实际学生请求和本地实验输出。",
+  "scope": "MiniVectorDB 加赛初版和本轮 TopK 优化。区分学生原话、Agent 工作和工具测量。",
   "conversations": [
     {"role": "student", "content": "我们先不管这个了我们现在开始做加赛部分的题吧"},
-    {"role": "assistant", "content": "第一版已经通过官方公开的 20 个用例，包括重启、事务回滚和失败语句原子性。我接下来补上真正参与查询的向量索引，再单独验证强制终止后的恢复。"}
+    {"role": "assistant", "content": "第一版已经通过官方公开的 20 个用例，包括重启、事务回滚和失败语句原子性。我接下来补上真正参与查询的向量索引，再单独验证强制终止后的恢复。"},
+    {"role": "student", "content": "帮我做加赛题"},
+    {"role": "student", "content": "我的仓库里已经有做过的分支，请你找到并根据指南帮我完成"},
+    {"role": "student", "origin": "用户转发的官方指南摘录，并非学生独立解释", "content": "采用小规模、单客户端负载：默认 10,000 条记录、128 维向量、1,000 条 TopK 查询，K = 10，其中一半查询带普通列等值过滤。"},
+    {"role": "assistant", "content": "指南确认了默认性能负载是 1 万条、128 维、1,000 次 TopK，其中一半带等值过滤。我会补上等值过滤的热查询路径，并用这个规模跑改动前后对照。协议以分支内更新后的 JSONL 驱动为准，Agent 材料只记录真实交互和实测。"}
   ],
   "experiments": [
     {"source": "official public driver, Linux container", "output": "sql_crud: PASS; sql_comparisons: PASS; sql_ordering: PASS; sql_empty: PASS; sql_primary_key: PASS; sql_unicode: PASS; sql_bigint: PASS; sql_unsupported: PASS; storage_restart: PASS; vector_euclidean: PASS; transaction_commit: PASS; transaction_rollback: PASS; storage_mutations: PASS; storage_multiple_tables: PASS; vector_ties_and_filter: PASS; vector_float32: PASS; vector_index_maintenance: PASS; transaction_failed_insert: PASS; transaction_autocommit_atomic: PASS; transaction_shutdown_rollback: PASS"},
     {"source": "tests/crash_recovery.py", "output": "PASS: two process kills, committed rows recovered, uncommitted and failed rows absent"},
-    {"source": "tests/vector_search.py", "output": "PASS: exact matches 24 independent TopK results, ANN recall=1.000, elapsed=0.067s"}
+    {"source": "tests/vector_search.py", "output": "PASS: exact matches 24 independent TopK results, ANN recall=1.000, elapsed=0.067s"},
+    {"source": "本轮 Windows 本地协议回归，使用题包的用例解析和断言，自定义 Windows 管道传输", "output": "20 个公开用例全部 PASS；强杀恢复 PASS；24 组独立 TopK 对照 PASS，ANN recall=1.000；主键 TopK、事务缓存失效和磁盘扫描回退 PASS。"},
+    {"source": "本轮 Agent 执行的 Windows 本地 SQL 层合成对照，固定种子 2217，1 万条 128 维向量，1000 条查询各半，排除协议及容器开销", "output": "无过滤耗时 13.075 → 9.758 秒，等值过滤耗时 6.459 → 0.780 秒，批量写入 2.453 → 2.534 秒；1000 条 TopK 的结果完全一致，日志字节数均为 25388761。"}
   ],
-  "limitations": "本轮实现和上述实验由 Agent 执行。当前记录没有学生独立设计、解释实验或复盘的材料，也没有正式评测结果。"
+  "limitations": "以上实现与实验由 Agent 执行。指南是用户提供的赛题来源。当前记录缺少学生独立设计、解释实验或复盘的材料。Windows SQL 层对照没有采集正式 cgroup I/O 或峰值内存，也未获得正式评测结果。"
 }

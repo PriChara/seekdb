@@ -47,6 +47,26 @@ def main():
             recall = total_recall / 24
             assert recall >= 0.95
             print(f'PASS: exact matches 24 independent TopK results, ANN recall={recall:.3f}, elapsed={time.perf_counter()-start:.3f}s')
+
+            probe = json.dumps(vectors[0])
+            ordered = f" ORDER BY L2_DISTANCE(vec, '{probe}') LIMIT 1"
+            query = 'SELECT id FROM items' + ordered
+            assert db.execute(query, 'exact')['rows'] == [[0]]
+            primary = 'SELECT id FROM items WHERE id = 7 AND category = 3' + ordered
+            assert db.execute(primary, 'exact')['rows'] == [[7]]
+            db.execute('BEGIN', 'exact')
+            db.execute('DELETE FROM items WHERE id = 0', 'exact')
+            assert db.execute(query, 'exact')['rows'] != [[0]]
+            db.execute('ROLLBACK', 'exact')
+            assert db.execute(query, 'exact')['rows'] == [[0]]
+            db.invalidate_index('items')
+            db.VECTOR_CACHE_BYTES = 0
+            assert db.execute(query, 'exact')['rows'] == [[0]]
+            assert db.vector_cache is None
+            db.COORDINATE_INDEX_ROWS = 0
+            multi_filter = 'SELECT id FROM items WHERE category = 0 AND category >= 0' + ordered
+            assert db.execute(multi_filter, 'ann')['rows'] == [[0]]
+            print('PASS: primary-key TopK, transactional cache invalidation, and disk scan fallback')
         finally:
             db.log.close()
 

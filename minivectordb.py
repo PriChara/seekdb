@@ -1,6 +1,7 @@
 """Single-client SQL and vector execution over a disk-backed transaction log."""
 
 import bisect
+from array import array
 from collections import OrderedDict
 import heapq
 from itertools import islice
@@ -237,25 +238,43 @@ def validate(value, column):
 
 
 class Database:
+    VECTOR_CACHE_BYTES = 64 * 1024 * 1024
+    FILTER_CACHE_BYTES = 16 * 1024 * 1024
+    COORDINATE_INDEX_ROWS = 131072
+
     def __init__(self, directory):
         self.log = Log(directory)
         self.indexes = {}
+        self.vector_cache = None
+        self.filter_cache = None
         for table in self.log.tables:
             schema = self.schema(table)
             if 'index' in schema:
                 self.index(table, schema)
 
+    def invalidate_index(self, table):
+        self.indexes.pop(table, None)
+        if self.vector_cache is not None and self.vector_cache[0] == table:
+            self.vector_cache = None
+            self.filter_cache = None
+
     def index(self, table, schema):
         if table not in self.indexes:
+            if self.row_count_upper_bound(table) > self.COORDINATE_INDEX_ROWS:
+                return None
+            self.indexes.clear()
             column = next(i for i, c in enumerate(schema['columns']) if c[1] == 'vector')
             entries = sorted((row[column][0], key) for key, row in self.log.rows(table))
             self.indexes[table] = entries
         return self.indexes[table]
 
+    def row_count_upper_bound(self, table):
+        return len(self.log.tables.get(table, {})) + len(self.log.pending.get(table, {}))
+
     def stage(self, table, records):
         count = self.log.stage(table, records)
         if count:
-            self.indexes.pop(table, None)
+            self.invalidate_index(table)
         return count
 
     def execute(self, sql, mode):
@@ -271,7 +290,7 @@ class Database:
                 require(self.log.transaction, 'No transaction is open')
                 if verb == 'rollback':
                     for table in self.log.pending:
-                        self.indexes.pop(table, None)
+                        self.invalidate_index(table)
                 (self.log.commit if verb == 'commit' else self.log.rollback)()
             return {}
         if verb == 'create':
@@ -479,7 +498,12 @@ class Database:
             if rank_expr[1] is not None and limit is not None and not descending and 'index' in schema:
                 column = self.column(schema, rank_expr[0])
                 probe = vector(rank_expr[1], schema['columns'][column][2])
-                source = self.indexed_topk(name, schema, conditions, probe, order_value, limit, mode)
+                if any(index == schema['key'] and comparison == '=' for index, comparison, _ in conditions):
+                    source = heapq.nsmallest(limit, source, key=lambda item: (order_value(item[1]), item[0]))
+                elif not conditions or (len(conditions) == 1 and conditions[0][1] == '='):
+                    source = self.vector_topk(name, column, probe, limit, conditions)
+                else:
+                    source = self.indexed_topk(name, schema, conditions, probe, order_value, limit, mode)
             elif descending:
                 key_function = lambda item: (order_value(item[1]), -item[0])
                 source = heapq.nlargest(limit, source, key=key_function) if limit is not None else sorted(source, key=key_function, reverse=True)
@@ -490,10 +514,61 @@ class Database:
             source = islice(source, limit)
         return {'columns': output, 'rows': [[value(row) for value in projectors] for _, row in source]}
 
+    def vector_topk(self, name, column, probe, limit, conditions):
+        if limit == 0:
+            return []
+        dimension = len(probe)
+        if self.vector_cache is None or self.vector_cache[0] != name:
+            # One compact index per database keeps repeated vector scans within
+            # a fixed memory budget. Larger tables scan the log in row order.
+            keys, values = array('q'), array('f')
+            row_capacity = self.VECTOR_CACHE_BYTES // (keys.itemsize + dimension * values.itemsize)
+            if self.row_count_upper_bound(name) <= row_capacity:
+                self.vector_cache = None
+                self.filter_cache = None
+                for key, row in self.log.rows(name):
+                    keys.append(key)
+                    values.extend(row[column])
+                self.vector_cache = (name, keys, values)
+        if self.vector_cache is None or self.vector_cache[0] != name:
+            rows = (item for item in self.log.rows(name) if matches(item[1], conditions))
+            return heapq.nsmallest(limit, rows,
+                                   key=lambda item: (math.dist(item[1][column], probe), item[0]))
+
+        _, keys, values = self.vector_cache
+        vectors = memoryview(values)
+        positions = range(len(keys))
+        if conditions:
+            filter_column, _, target = conditions[0]
+            if self.filter_cache is None or self.filter_cache[0] != filter_column:
+                labels = []
+                remaining = self.FILTER_CACHE_BYTES
+                for _, row in self.log.rows(name):
+                    value = row[filter_column]
+                    remaining -= sys.getsizeof(value) + 16
+                    if remaining < 0:
+                        labels = None
+                        break
+                    labels.append(value)
+                self.filter_cache = (filter_column, labels)
+            labels = self.filter_cache[1]
+            if labels is None:
+                positions = (i for i, key in enumerate(keys)
+                             if self.log.read(self.log.offset(name, key))[filter_column] == target)
+            else:
+                positions = (i for i, value in enumerate(labels) if value == target)
+        ranks = ((math.dist(vectors[i * dimension:(i + 1) * dimension], probe), keys[i])
+                 for i in positions)
+        return [(key, self.log.read(self.log.offset(name, key)))
+                for _, key in heapq.nsmallest(limit, ranks)]
+
     def indexed_topk(self, name, schema, conditions, probe, distance, limit, mode):
         if limit == 0:
             return []
         entries = self.index(name, schema)
+        if entries is None:
+            return heapq.nsmallest(limit, self.matching(name, schema, conditions),
+                                   key=lambda item: (distance(item[1]), item[0]))
         right = bisect.bisect_left(entries, (probe[0], -(1 << 63)))
         left = right - 1
         best = []
