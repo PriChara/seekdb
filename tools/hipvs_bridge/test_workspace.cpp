@@ -28,6 +28,7 @@ struct cuvsFilter { int type; uintptr_t addr; };
 static std::set<void*> allocations;
 static int alloc_calls, parameter_calls, fail_alloc;
 static int candidate_degree, refinement_iterations;
+static int observed_search_width;
 static size_t observed_itopk;
 static int cuvsResourcesCreate(int* r) { *r=1; return 0; }
 static int cuvsResourcesDestroy(int) { return 0; }
@@ -68,6 +69,7 @@ static int cuvsCagraSearchParamsDestroy(SearchParams* p) { delete p; return 0; }
 static int cuvsCagraSearch(int,SearchParams* p,Index*,DLManagedTensor* q,
                           DLManagedTensor* ids,DLManagedTensor* distances,cuvsFilter) {
   observed_itopk=p->itopk_size;
+  observed_search_width=p->search_width;
   auto count=q->dl_tensor.shape[0]*ids->dl_tensor.shape[1];
   for (long j=0;j<count;++j) {
     static_cast<unsigned*>(ids->dl_tensor.data)[j]=static_cast<unsigned>(j%10);
@@ -158,9 +160,15 @@ int main() {
   seekdb_cuvs_free(h);
   h=seekdb_cuvs_build(base,65536,128); assert(h);
   assert(candidate_degree==144 && refinement_iterations==28);
+  assert(seekdb_cuvs_search(h,base,1,10,ids,dist)==0 && observed_search_width==4);
   seekdb_cuvs_free(h);
   h=seekdb_cuvs_build(base,65537,128); assert(h);
-  assert(candidate_degree==144 && refinement_iterations==36);
+  assert(candidate_degree==144 && refinement_iterations==32);
+  assert(seekdb_cuvs_search(h,base,1,10,ids,dist)==0 && observed_search_width==8);
+  seekdb_cuvs_free(h);
+  h=seekdb_cuvs_build(base,65537,127); assert(h);
+  assert(candidate_degree==160 && refinement_iterations==72);
+  assert(seekdb_cuvs_search(h,base,1,10,ids,dist)==0 && observed_search_width==4);
   seekdb_cuvs_free(h);
   std::puts("CPU contract checks passed (not a GPU benchmark)");
 }
