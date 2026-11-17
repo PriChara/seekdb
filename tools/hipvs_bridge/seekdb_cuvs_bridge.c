@@ -1,10 +1,4 @@
 /* seekdb <-> hipVS bridge: plain-C CAGRA kNN; all cuVS/ROCm deps live here. */
-#if defined(__HIP_PLATFORM_AMD__) && defined(__linux__)
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
-#include <sched.h>
-#endif
 #include "seekdb_cuvs_bridge.h"
 #include <cuvs/core/c_api.h>
 #include <cuvs/neighbors/cagra.h>
@@ -45,7 +39,7 @@ static int sk_reserve(sk_cuvs_index* h, void** buffer, size_t* capacity, size_t 
   return 0;
 }
 
-static void* sk_cuvs_build(const float* base, long n, long dim)
+void* seekdb_cuvs_build(const float* base, long n, long dim)
 {
   sk_cuvs_index* h = (sk_cuvs_index*)calloc(1, sizeof(*h));
   if (!h) return NULL;
@@ -61,8 +55,8 @@ static void* sk_cuvs_build(const float* base, long n, long dim)
   dset.dl_tensor.dtype.code = kDLFloat; dset.dl_tensor.dtype.bits = 32; dset.dl_tensor.dtype.lanes = 1;
   dset.dl_tensor.shape = ds; dset.dl_tensor.strides = 0; dset.dl_tensor.byte_offset = 0;
 
-  /* Limit refinements for large, wide datasets while retaining the final
-   * graph degree. */
+  /* Limit expensive distance refinements for large, wide datasets while
+   * retaining the final graph degree. */
   const int compact_candidates = n >= 32768 && dim >= 128;
   if (cuvsCagraIndexParamsCreate(&h->ip) != CUVS_SUCCESS) goto fail_res;
   h->ip->build_algo = NN_DESCENT;
@@ -79,35 +73,6 @@ fail_ip:  cuvsCagraIndexParamsDestroy(h->ip);
 fail_res: cuvsResourcesDestroy(h->res); pthread_mutex_destroy(&h->search_mutex); free(h);
   fprintf(stderr, "[seekdb_cuvs] build failed: %s\n", cuvsGetLastErrorText());
   return NULL;
-}
-
-void* seekdb_cuvs_build(const float* base, long n, long dim)
-{
-#if defined(__HIP_PLATFORM_AMD__) && defined(__linux__)
-  /* On large CPU masks hipVS can start more host workers than a container's
-   * CPU quota can run. Restrict the calling thread before hipVS starts its
-   * workers and restore its mask on every build outcome. */
-  cpu_set_t original, subset;
-  int changed = 0;
-  if (!getenv("OMP_NUM_THREADS") && !getenv("OMP_THREAD_LIMIT") &&
-      sched_getaffinity(0, sizeof(original), &original) == 0 && CPU_COUNT(&original) > 16) {
-    CPU_ZERO(&subset);
-    for (int cpu = 0, selected = 0; cpu < CPU_SETSIZE && selected < 8; ++cpu) {
-      if (CPU_ISSET(cpu, &original)) {
-        CPU_SET(cpu, &subset);
-        ++selected;
-      }
-    }
-    changed = sched_setaffinity(0, sizeof(subset), &subset) == 0;
-  }
-#endif
-  void* index = sk_cuvs_build(base, n, dim);
-#if defined(__HIP_PLATFORM_AMD__) && defined(__linux__)
-  if (changed && sched_setaffinity(0, sizeof(original), &original) != 0) {
-    perror("[seekdb_cuvs] restore build thread affinity");
-  }
-#endif
-  return index;
 }
 
 int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,

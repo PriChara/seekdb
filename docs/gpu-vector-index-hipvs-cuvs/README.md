@@ -134,10 +134,7 @@ and three frees. The snapshot writer streams from a file mapping and falls
 back to buffered reads if mapping fails. NN-Descent retains 128 final edges
 per vector. Builds with at least 32,768 rows and 128 dimensions refine 144
 candidate edges for up to 36 iterations. Other builds refine 160 candidates
-for up to 72 iterations. On AMD Linux, when more than 16 CPUs are available
-and no OpenMP thread setting is supplied, the bridge temporarily limits the
-build thread's CPU affinity to eight of its allowed CPUs. The adaptor reuses
-the buffered row ID mapping
+for up to 72 iterations. The adaptor reuses the buffered row ID mapping
 and avoids temporary heap allocations for single queries requesting up to 128 results.
 GPU results still require the built index to cover the entire current buffer.
 
