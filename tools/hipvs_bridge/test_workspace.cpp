@@ -114,7 +114,7 @@ static int cuvsCagraIndexGetDataset(Index* i,DLManagedTensor* view) {
 int main() {
   float base[2000]={}; float query[8]={}; unsigned ids[800]={}; float dist[800]={};
   void* h=seekdb_cuvs_build(base,1000,2); assert(h);
-  assert(candidate_degree==160 && refinement_iterations==36);
+  assert(candidate_degree==160 && refinement_iterations==72);
   assert(seekdb_cuvs_search(h,query,1,10,ids,dist)==0);
   assert(alloc_calls==3 && parameter_calls==1 && ids[9]==9 && dist[9]==9);
   for (int i=0;i<5;++i) assert(seekdb_cuvs_search(h,query,1,10,ids,dist)==0);
@@ -150,10 +150,10 @@ int main() {
   seekdb_cuvs_free(h); assert(allocations.empty());
   // The fake backend records graph parameters without accessing the dataset.
   h=seekdb_cuvs_build(base,32768,127); assert(h);
-  assert(candidate_degree==160 && refinement_iterations==36);
+  assert(candidate_degree==160 && refinement_iterations==72);
   seekdb_cuvs_free(h);
   h=seekdb_cuvs_build(base,32767,128); assert(h);
-  assert(candidate_degree==160 && refinement_iterations==36);
+  assert(candidate_degree==160 && refinement_iterations==72);
   seekdb_cuvs_free(h);
   h=seekdb_cuvs_build(base,32768,128); assert(h);
   assert(candidate_degree==144 && refinement_iterations==36);
@@ -167,7 +167,7 @@ int main() {
   assert(seekdb_cuvs_search(h,base,1,10,ids,dist)==0 && observed_search_width==4);
   seekdb_cuvs_free(h);
   h=seekdb_cuvs_build(base,65536,127); assert(h);
-  assert(candidate_degree==160 && refinement_iterations==36);
+  assert(candidate_degree==160 && refinement_iterations==72);
   seekdb_cuvs_free(h);
   h=seekdb_cuvs_build(base,65537,127); assert(h);
   assert(candidate_degree==160 && refinement_iterations==72);
