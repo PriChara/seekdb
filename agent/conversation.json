@@ -1,20 +1,40 @@
 {
   "synthetic": false,
   "scope": "MiniVectorDB 加赛初版和本轮 TopK 优化。区分学生原话、Agent 工作和工具测量。",
+  "context": {
+    "branch": "2026-competition-round2",
+    "starting_commit": "1a00042ab982464af149aeb40dc8dd5cd7c709ec",
+    "implementation_commit": "87942f9801d9e07d7f8deec25088ff19a1bbff46",
+    "constraints_from_problem": "先通过全部正式 SQL 用例。精确 TopK 按 float32 存储值计算欧氏距离，先过滤后排序，距离并列按主键升序。事务内读到自己的修改，回滚后恢复，已确认提交经强杀后可恢复。默认性能负载有等量的无过滤和等值过滤查询。"
+  },
   "conversations": [
     {"role": "student", "content": "我们先不管这个了我们现在开始做加赛部分的题吧"},
     {"role": "assistant", "content": "第一版已经通过官方公开的 20 个用例，包括重启、事务回滚和失败语句原子性。我接下来补上真正参与查询的向量索引，再单独验证强制终止后的恢复。"},
-    {"role": "student", "content": "帮我做加赛题"},
-    {"role": "student", "content": "我的仓库里已经有做过的分支，请你找到并根据指南帮我完成"},
-    {"role": "student", "origin": "用户转发的官方指南摘录，并非学生独立解释", "content": "采用小规模、单客户端负载：默认 10,000 条记录、128 维向量、1,000 条 TopK 查询，K = 10，其中一半查询带普通列等值过滤。"},
-    {"role": "assistant", "content": "指南确认了默认性能负载是 1 万条、128 维、1,000 次 TopK，其中一半带等值过滤。我会补上等值过滤的热查询路径，并用这个规模跑改动前后对照。协议以分支内更新后的 JSONL 驱动为准，Agent 材料只记录真实交互和实测。"}
+    {"id": "prompt-1", "role": "student", "content": "帮我做加赛题"},
+    {"id": "prompt-2", "role": "student", "origin": "原消息摘录，省略指南链接", "content": "我的仓库里已经有做过的分支，请你找到并根据指南帮我完成"},
+    {"id": "guide-1", "role": "student", "origin": "用户转发的官方指南摘录，并非学生独立解释", "content": "采用小规模、单客户端负载：默认 10,000 条记录、128 维向量、1,000 条 TopK 查询，K = 10，其中一半查询带普通列等值过滤。"},
+    {"id": "agent-plan", "role": "assistant", "content": "指南确认了默认性能负载是 1 万条、128 维、1,000 次 TopK，其中一半带等值过滤。我会补上等值过滤的热查询路径，并用这个规模跑改动前后对照。协议以分支内更新后的 JSONL 驱动为准，Agent 材料只记录真实交互和实测。"},
+    {"id": "agent-report", "role": "assistant", "content": "这次本地对照的 1,000 条 TopK 结果完全一致，查询总耗时从 19.53 秒降到 10.54 秒，主要收益来自等值过滤。Docker Desktop 仍未提供 Linux 引擎接口，我会再检查一次容器环境，避免把 Windows 回归结果当成镜像预检。"},
+    {"id": "prompt-3", "role": "student", "origin": "原消息末句", "content": "请你按照你刚刚的改进，为我写一份Prompt材料"}
+  ],
+  "implementation_notes": [
+    {"author": "assistant", "topic": "查询瓶颈和等值过滤", "analysis": "旧版根据向量首维距离剪枝，高维分布下仍可能访问许多日志行。新版将已建索引表的 float32 向量紧凑存放，单列等值过滤先扫描缓存的标签，只对匹配行计算距离，再从日志读取入选行。缓存使用 float32 的原因是保持原存储精度，同时减少内存占用。排序仍以距离和主键组成键。"},
+    {"author": "assistant", "topic": "事务与缓存边界", "analysis": "位置列表、向量和标签必须来自同一份可见行集合。成功写入和回滚会使受影响的缓存失效。回归先缓存 Top1，在事务中删除该行并确认它消失，回滚后再确认它恢复。另将测试进程的缓存限额设为零，验证磁盘扫描仍返回同一结果。"},
+    {"author": "assistant", "topic": "保留正确性时的取舍", "analysis": "向量缓存预算 64 MiB，单列标签预算 16 MiB，超过预算使用磁盘读取。热查询省下重复 JSON 解码，但首次查询仍需准备缓存。计时中排除了预热、容器与协议，不能由此推断正式峰值内存或磁盘读写得分。"}
   ],
   "experiments": [
     {"source": "official public driver, Linux container", "output": "sql_crud: PASS; sql_comparisons: PASS; sql_ordering: PASS; sql_empty: PASS; sql_primary_key: PASS; sql_unicode: PASS; sql_bigint: PASS; sql_unsupported: PASS; storage_restart: PASS; vector_euclidean: PASS; transaction_commit: PASS; transaction_rollback: PASS; storage_mutations: PASS; storage_multiple_tables: PASS; vector_ties_and_filter: PASS; vector_float32: PASS; vector_index_maintenance: PASS; transaction_failed_insert: PASS; transaction_autocommit_atomic: PASS; transaction_shutdown_rollback: PASS"},
     {"source": "tests/crash_recovery.py", "output": "PASS: two process kills, committed rows recovered, uncommitted and failed rows absent"},
     {"source": "tests/vector_search.py", "output": "PASS: exact matches 24 independent TopK results, ANN recall=1.000, elapsed=0.067s"},
-    {"source": "本轮 Windows 本地协议回归，使用题包的用例解析和断言，自定义 Windows 管道传输", "output": "20 个公开用例全部 PASS；强杀恢复 PASS；24 组独立 TopK 对照 PASS，ANN recall=1.000；主键 TopK、事务缓存失效和磁盘扫描回退 PASS。"},
-    {"source": "本轮 Agent 执行的 Windows 本地 SQL 层合成对照，固定种子 2217，1 万条 128 维向量，1000 条查询各半，排除协议及容器开销", "output": "无过滤耗时 13.075 → 9.758 秒，等值过滤耗时 6.459 → 0.780 秒，批量写入 2.453 → 2.534 秒；1000 条 TopK 的结果完全一致，日志字节数均为 25388761。"}
+    {"id": "public-regression", "source": "本轮 Windows 本地协议回归，使用题包的用例解析和断言，自定义 Windows 管道传输", "output": "20 个公开用例全部 PASS；强杀恢复 PASS；24 组独立 TopK 对照 PASS，ANN recall=1.000；主键 TopK、事务缓存失效和磁盘扫描回退 PASS。"},
+    {"id": "topk-comparison", "source": "本轮 Agent 执行的 Windows 本地 SQL 层合成对照，固定种子 2217，1 万条 128 维向量，1000 条查询各半，排除协议及容器开销", "output": "无过滤耗时 13.075 → 9.758 秒，等值过滤耗时 6.459 → 0.780 秒，批量写入 2.453 → 2.534 秒；1000 条 TopK 的结果完全一致，日志字节数均为 25388761。"},
+    {"id": "container-preflight", "source": "本轮 Agent 执行 docker version 检查", "output": "Docker Desktop 的 Linux 引擎命名管道不可用，镜像预检未完成。"}
   ],
-  "limitations": "以上实现与实验由 Agent 执行。指南是用户提供的赛题来源。当前记录缺少学生独立设计、解释实验或复盘的材料。Windows SQL 层对照没有采集正式 cgroup I/O 或峰值内存，也未获得正式评测结果。"
+  "retrospective": {
+    "author": "assistant",
+    "content": "本地单轮查询总耗时下降约 46%，其中等值过滤收益更大。该轮写入略慢，日志大小相同，所以目前证据只支持查询优化。正式性能依赖三轮测量以及 I/O 和峰值内存，仍需在 Linux 容器中预检。",
+    "next_step_status": "计划，尚未执行：学生可自行预测事务回滚后的 Top1，再用一组未出现在公开题包里的并列向量检验主键规则，并留下自己的 SQL、实际输出和解释。"
+  },
+  "limitations": "本轮实现、说明与实验由 Agent 执行。指南是用户提供的赛题来源。当前记录缺少学生独立设计、解释实验或复盘的材料。Windows SQL 层对照没有采集正式 cgroup I/O 或峰值内存，也未获得正式评测结果。",
+  "redaction": "仅保留与加赛实现和验证相关的文字，省略链接和登录信息。"
 }
