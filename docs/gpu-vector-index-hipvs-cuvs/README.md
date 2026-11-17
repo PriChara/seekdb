@@ -132,10 +132,10 @@ This candidate reuses per-index device allocations and search parameters under
 a mutex. A warm query that fits the workspace avoids three device allocations
 and three frees. The snapshot writer streams from a file mapping and falls
 back to buffered reads if mapping fails. NN-Descent retains 128 final edges
-per vector. Indexes with at least 128 dimensions refine 128 candidate edges
-through 65,536 rows and 144 above that size. Narrower indexes refine 160
-candidate edges. Builds with at least 32,768 rows and 128 dimensions use up
-to 36 iterations. Other builds use up to 72. The adaptor reuses the buffered row ID mapping
+per vector. Indexes with at least 128 dimensions use up to 36 iterations and
+refine 128 candidate edges through 65,536 rows, or 144 above that size.
+Narrower indexes refine 160 candidate edges for up to 72 iterations. The adaptor
+reuses the buffered row ID mapping
 and avoids temporary heap allocations for single queries requesting up to 128 results.
 GPU results still require the built index to cover the entire current buffer.
 
