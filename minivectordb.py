@@ -265,11 +265,44 @@ class Database:
             self.indexes.clear()
             column = next(i for i, c in enumerate(schema['columns']) if c[1] == 'vector')
             entries = sorted((row[column][0], key) for key, row in self.log.rows(table))
-            self.indexes[table] = entries
+            self.indexes[table] = (entries, {})
         return self.indexes[table]
 
     def row_count_upper_bound(self, table):
         return len(self.log.tables.get(table, {})) + len(self.log.pending.get(table, {}))
+
+    def indexed_candidates(self, name, schema, conditions, coordinate_index):
+        entries, equality_columns = coordinate_index
+        # Bound the auxiliary index to small tables and two columns. Each
+        # bucket keeps the original coordinate ordering and reuses its entries.
+        if len(entries) > 16_384:
+            return entries
+        equality = next(((column, value) for column, op, value in conditions
+                         if op == '=' and column != schema['key']), None)
+        if equality is None:
+            return entries
+        column, value = equality
+        if schema['columns'][column][2] > 128:
+            return entries
+        if column not in equality_columns:
+            if len(equality_columns) >= 2:
+                return entries
+            buckets = {}
+            for entry in entries:
+                _, key = entry
+                cell = self.log.read(self.log.offset(name, key))[column]
+                bucket = buckets.get(cell)
+                if bucket is None:
+                    buckets[cell] = entry
+                elif isinstance(bucket, list):
+                    bucket.append(entry)
+                else:
+                    buckets[cell] = [bucket, entry]
+            equality_columns[column] = buckets
+        bucket = equality_columns[column].get(value)
+        if bucket is None:
+            return ()
+        return bucket if isinstance(bucket, list) else (bucket,)
 
     def stage(self, table, records):
         count = self.log.stage(table, records)
@@ -495,12 +528,12 @@ class Database:
                 order_value = projectors[output.index(ordering[0])]
             else:
                 order_value = bind(ordering)
-            if rank_expr[1] is not None and limit is not None and not descending and 'index' in schema:
+            uses_primary_key = any(column == schema['key'] and op == '=' for column, op, _ in conditions)
+            if (rank_expr[1] is not None and limit is not None
+                    and not descending and 'index' in schema and not uses_primary_key):
                 column = self.column(schema, rank_expr[0])
                 probe = vector(rank_expr[1], schema['columns'][column][2])
-                if any(index == schema['key'] and comparison == '=' for index, comparison, _ in conditions):
-                    source = heapq.nsmallest(limit, source, key=lambda item: (order_value(item[1]), item[0]))
-                elif not conditions or (len(conditions) == 1 and conditions[0][1] == '='):
+                if not conditions or (len(conditions) == 1 and conditions[0][1] == '='):
                     source = self.vector_topk(name, column, probe, limit, conditions)
                 else:
                     source = self.indexed_topk(name, schema, conditions, probe, order_value, limit, mode)
@@ -565,16 +598,17 @@ class Database:
     def indexed_topk(self, name, schema, conditions, probe, distance, limit, mode):
         if limit == 0:
             return []
-        entries = self.index(name, schema)
-        if entries is None:
+        coordinate_index = self.index(name, schema)
+        if coordinate_index is None:
             return heapq.nsmallest(limit, self.matching(name, schema, conditions),
                                    key=lambda item: (distance(item[1]), item[0]))
+        entries = self.indexed_candidates(name, schema, conditions, coordinate_index)
         right = bisect.bisect_left(entries, (probe[0], -(1 << 63)))
         left = right - 1
         best = []
         # The coordinate gap is a lower bound on Euclidean distance. In ANN
         # mode only, permit a 0.1% distance approximation on larger indexes.
-        factor = 1.001 if mode == 'ann' and len(entries) > 256 else 1.0
+        factor = 1.001 if mode == 'ann' and len(coordinate_index[0]) > 256 else 1.0
         while left >= 0 or right < len(entries):
             left_gap = probe[0] - entries[left][0] if left >= 0 else math.inf
             right_gap = entries[right][0] - probe[0] if right < len(entries) else math.inf
@@ -587,7 +621,7 @@ class Database:
                 _, key = entries[right]
                 right += 1
             row = self.log.read(self.log.offset(name, key))
-            if matches(row, conditions):
+            if not conditions or matches(row, conditions):
                 item = (-distance(row), -key, row)
                 if len(best) < limit:
                     heapq.heappush(best, item)

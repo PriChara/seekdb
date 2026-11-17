@@ -8,29 +8,113 @@
     "constraints_from_problem": "先通过全部正式 SQL 用例。精确 TopK 按 float32 存储值计算欧氏距离，先过滤后排序，距离并列按主键升序。事务内读到自己的修改，回滚后恢复，已确认提交经强杀后可恢复。默认性能负载有等量的无过滤和等值过滤查询。"
   },
   "conversations": [
-    {"role": "student", "content": "我们先不管这个了我们现在开始做加赛部分的题吧"},
-    {"role": "assistant", "content": "第一版已经通过官方公开的 20 个用例，包括重启、事务回滚和失败语句原子性。我接下来补上真正参与查询的向量索引，再单独验证强制终止后的恢复。"},
-    {"id": "prompt-1", "role": "student", "content": "帮我做加赛题"},
-    {"id": "prompt-2", "role": "student", "origin": "原消息摘录，省略指南链接", "content": "我的仓库里已经有做过的分支，请你找到并根据指南帮我完成"},
-    {"id": "guide-1", "role": "student", "origin": "用户转发的官方指南摘录，并非学生独立解释", "content": "采用小规模、单客户端负载：默认 10,000 条记录、128 维向量、1,000 条 TopK 查询，K = 10，其中一半查询带普通列等值过滤。"},
-    {"id": "agent-plan", "role": "assistant", "content": "指南确认了默认性能负载是 1 万条、128 维、1,000 次 TopK，其中一半带等值过滤。我会补上等值过滤的热查询路径，并用这个规模跑改动前后对照。协议以分支内更新后的 JSONL 驱动为准，Agent 材料只记录真实交互和实测。"},
-    {"id": "agent-report", "role": "assistant", "content": "这次本地对照的 1,000 条 TopK 结果完全一致，查询总耗时从 19.53 秒降到 10.54 秒，主要收益来自等值过滤。Docker Desktop 仍未提供 Linux 引擎接口，我会再检查一次容器环境，避免把 Windows 回归结果当成镜像预检。"},
-    {"id": "prompt-3", "role": "student", "origin": "原消息末句", "content": "请你按照你刚刚的改进，为我写一份Prompt材料"},
-    {"id": "tie-plan", "role": "student", "origin": "学生发回的验证计划，采用了 Agent 提供的案例和措辞", "content": "我想验证两条向量距离相同时，Top1 是按主键选，还是按插入顺序选。我会先插入主键 9，再插入主键 2，看看查询返回哪条"},
-    {"id": "tie-prediction", "role": "student", "origin": "学生在运行前发回的预测，采用了 Agent 给出的预期和措辞", "content": "我预测会返回主键 **2**，因为两条向量到 `[0,0]` 的距离都是 **1**。题目规定距离相同时按主键升序排列，所以虽然主键 **9** 先插入，主键更小的 **2** 仍会排在第一"}
+    {
+      "role": "student",
+      "content": "我们先不管这个了我们现在开始做加赛部分的题吧"
+    },
+    {
+      "role": "assistant",
+      "content": "第一版已经通过官方公开的 20 个用例，包括重启、事务回滚和失败语句原子性。我接下来补上真正参与查询的向量索引，再单独验证强制终止后的恢复。"
+    },
+    {
+      "id": "prompt-1",
+      "role": "student",
+      "content": "帮我做加赛题"
+    },
+    {
+      "id": "prompt-2",
+      "role": "student",
+      "origin": "原消息摘录，省略指南链接",
+      "content": "我的仓库里已经有做过的分支，请你找到并根据指南帮我完成"
+    },
+    {
+      "id": "guide-1",
+      "role": "student",
+      "origin": "用户转发的官方指南摘录，并非学生独立解释",
+      "content": "采用小规模、单客户端负载：默认 10,000 条记录、128 维向量、1,000 条 TopK 查询，K = 10，其中一半查询带普通列等值过滤。"
+    },
+    {
+      "id": "agent-plan",
+      "role": "assistant",
+      "content": "指南确认了默认性能负载是 1 万条、128 维、1,000 次 TopK，其中一半带等值过滤。我会补上等值过滤的热查询路径，并用这个规模跑改动前后对照。协议以分支内更新后的 JSONL 驱动为准，Agent 材料只记录真实交互和实测。"
+    },
+    {
+      "id": "agent-report",
+      "role": "assistant",
+      "content": "这次本地对照的 1,000 条 TopK 结果完全一致，查询总耗时从 19.53 秒降到 10.54 秒，主要收益来自等值过滤。Docker Desktop 仍未提供 Linux 引擎接口，我会再检查一次容器环境，避免把 Windows 回归结果当成镜像预检。"
+    },
+    {
+      "id": "prompt-3",
+      "role": "student",
+      "origin": "原消息末句",
+      "content": "请你按照你刚刚的改进，为我写一份Prompt材料"
+    },
+    {
+      "id": "tie-plan",
+      "role": "student",
+      "origin": "学生发回的验证计划，采用了 Agent 提供的案例和措辞",
+      "content": "我想验证两条向量距离相同时，Top1 是按主键选，还是按插入顺序选。我会先插入主键 9，再插入主键 2，看看查询返回哪条"
+    },
+    {
+      "id": "tie-prediction",
+      "role": "student",
+      "origin": "学生在运行前发回的预测，采用了 Agent 给出的预期和措辞",
+      "content": "我预测会返回主键 **2**，因为两条向量到 `[0,0]` 的距离都是 **1**。题目规定距离相同时按主键升序排列，所以虽然主键 **9** 先插入，主键更小的 **2** 仍会排在第一"
+    },
+    {
+      "role": "student",
+      "content": "我们继续做加赛题吧，[https://oceanbase.yuque.com/org-wiki-obtech-vh7w9r/hc3pio/vzt7rbh4125g18wx](https://oceanbase.yuque.com/org-wiki-obtech-vh7w9r/hc3pio/vzt7rbh4125g18wx)在文档里有任何可以借助的东西，一定要和我获取"
+    },
+    {
+      "role": "student",
+      "content": "没有其他的内容了 我没有做过任何测试，你帮我多做一些测试，争取让这些都能高一点"
+    }
   ],
   "implementation_notes": [
-    {"author": "assistant", "topic": "查询瓶颈和等值过滤", "analysis": "旧版根据向量首维距离剪枝，高维分布下仍可能访问许多日志行。新版将已建索引表的 float32 向量紧凑存放，单列等值过滤先扫描缓存的标签，只对匹配行计算距离，再从日志读取入选行。缓存使用 float32 的原因是保持原存储精度，同时减少内存占用。排序仍以距离和主键组成键。"},
-    {"author": "assistant", "topic": "事务与缓存边界", "analysis": "位置列表、向量和标签必须来自同一份可见行集合。成功写入和回滚会使受影响的缓存失效。回归先缓存 Top1，在事务中删除该行并确认它消失，回滚后再确认它恢复。另将测试进程的缓存限额设为零，验证磁盘扫描仍返回同一结果。"},
-    {"author": "assistant", "topic": "保留正确性时的取舍", "analysis": "向量缓存预算 64 MiB，单列标签预算 16 MiB，超过预算使用磁盘读取。热查询省下重复 JSON 解码，但首次查询仍需准备缓存。计时中排除了预热、容器与协议，不能由此推断正式峰值内存或磁盘读写得分。"}
+    {
+      "author": "assistant",
+      "topic": "查询瓶颈和等值过滤",
+      "analysis": "旧版根据向量首维距离剪枝，高维分布下仍可能访问许多日志行。新版将已建索引表的 float32 向量紧凑存放，单列等值过滤先扫描缓存的标签，只对匹配行计算距离，再从日志读取入选行。缓存使用 float32 的原因是保持原存储精度，同时减少内存占用。排序仍以距离和主键组成键。"
+    },
+    {
+      "author": "assistant",
+      "topic": "事务与缓存边界",
+      "analysis": "位置列表、向量和标签必须来自同一份可见行集合。成功写入和回滚会使受影响的缓存失效。回归先缓存 Top1，在事务中删除该行并确认它消失，回滚后再确认它恢复。另将测试进程的缓存限额设为零，验证磁盘扫描仍返回同一结果。"
+    },
+    {
+      "author": "assistant",
+      "topic": "保留正确性时的取舍",
+      "analysis": "向量缓存预算 64 MiB，单列标签预算 16 MiB，超过预算使用磁盘读取。热查询省下重复 JSON 解码，但首次查询仍需准备缓存。计时中排除了预热、容器与协议，不能由此推断正式峰值内存或磁盘读写得分。"
+    }
   ],
   "experiments": [
-    {"source": "official public driver, Linux container", "output": "sql_crud: PASS; sql_comparisons: PASS; sql_ordering: PASS; sql_empty: PASS; sql_primary_key: PASS; sql_unicode: PASS; sql_bigint: PASS; sql_unsupported: PASS; storage_restart: PASS; vector_euclidean: PASS; transaction_commit: PASS; transaction_rollback: PASS; storage_mutations: PASS; storage_multiple_tables: PASS; vector_ties_and_filter: PASS; vector_float32: PASS; vector_index_maintenance: PASS; transaction_failed_insert: PASS; transaction_autocommit_atomic: PASS; transaction_shutdown_rollback: PASS"},
-    {"source": "tests/crash_recovery.py", "output": "PASS: two process kills, committed rows recovered, uncommitted and failed rows absent"},
-    {"source": "tests/vector_search.py", "output": "PASS: exact matches 24 independent TopK results, ANN recall=1.000, elapsed=0.067s"},
-    {"id": "public-regression", "source": "本轮 Windows 本地协议回归，使用题包的用例解析和断言，自定义 Windows 管道传输", "output": "20 个公开用例全部 PASS；强杀恢复 PASS；24 组独立 TopK 对照 PASS，ANN recall=1.000；主键 TopK、事务缓存失效和磁盘扫描回退 PASS。"},
-    {"id": "topk-comparison", "source": "本轮 Agent 执行的 Windows 本地 SQL 层合成对照，固定种子 2217，1 万条 128 维向量，1000 条查询各半，排除协议及容器开销", "output": "无过滤耗时 13.075 → 9.758 秒，等值过滤耗时 6.459 → 0.780 秒，批量写入 2.453 → 2.534 秒；1000 条 TopK 的结果完全一致，日志字节数均为 25388761。"},
-    {"id": "container-preflight", "source": "本轮 Agent 执行 docker version 检查", "output": "Docker Desktop 的 Linux 引擎命名管道不可用，镜像预检未完成。"},
+    {
+      "source": "official public driver, Linux container",
+      "output": "sql_crud: PASS; sql_comparisons: PASS; sql_ordering: PASS; sql_empty: PASS; sql_primary_key: PASS; sql_unicode: PASS; sql_bigint: PASS; sql_unsupported: PASS; storage_restart: PASS; vector_euclidean: PASS; transaction_commit: PASS; transaction_rollback: PASS; storage_mutations: PASS; storage_multiple_tables: PASS; vector_ties_and_filter: PASS; vector_float32: PASS; vector_index_maintenance: PASS; transaction_failed_insert: PASS; transaction_autocommit_atomic: PASS; transaction_shutdown_rollback: PASS"
+    },
+    {
+      "source": "tests/crash_recovery.py",
+      "output": "PASS: two process kills, committed rows recovered, uncommitted and failed rows absent"
+    },
+    {
+      "source": "tests/vector_search.py",
+      "output": "PASS: exact matches 24 independent TopK results, ANN recall=1.000, elapsed=0.067s"
+    },
+    {
+      "id": "public-regression",
+      "source": "本轮 Windows 本地协议回归，使用题包的用例解析和断言，自定义 Windows 管道传输",
+      "output": "20 个公开用例全部 PASS；强杀恢复 PASS；24 组独立 TopK 对照 PASS，ANN recall=1.000；主键 TopK、事务缓存失效和磁盘扫描回退 PASS。"
+    },
+    {
+      "id": "topk-comparison",
+      "source": "本轮 Agent 执行的 Windows 本地 SQL 层合成对照，固定种子 2217，1 万条 128 维向量，1000 条查询各半，排除协议及容器开销",
+      "output": "无过滤耗时 13.075 → 9.758 秒，等值过滤耗时 6.459 → 0.780 秒，批量写入 2.453 → 2.534 秒；1000 条 TopK 的结果完全一致，日志字节数均为 25388761。"
+    },
+    {
+      "id": "container-preflight",
+      "source": "本轮 Agent 执行 docker version 检查",
+      "output": "Docker Desktop 的 Linux 引擎命名管道不可用，镜像预检未完成。"
+    },
     {
       "id": "topk-tie-check",
       "source": "Agent 在空数据目录通过 JSONL 驱动本地引擎，search_mode=exact。使用学生确认的实验案例。",
@@ -43,6 +127,30 @@
       ],
       "output": "{\"id\":4,\"ok\":true,\"columns\":[\"id\",\"L2_DISTANCE\"],\"rows\":[[2,1.0]]}",
       "interpretation_by_assistant": "实际返回主键 2、距离 1，与运行前预测一致。插入顺序和主键升序相反，因此这组输入能区分两种并列处理规则。"
+    },
+    {
+      "source": "2026-11-15 Windows local paired run; baseline 1a00042ab982464af149aeb40dc8dd5cd7c709ec",
+      "output": "Seed 38, 10000 rows × 128 float32 dimensions, 16 evenly distributed labels, 48 exact Top10 queries per group, one warm-up query per run, three paired trials. Median filtered seconds: 0.4773 → 0.0734. Median unfiltered seconds: 1.0888 → 1.0736. The returned IDs matched the baseline in all trials. This run measured local wall time, without the official cgroup I/O or memory measurements."
+    },
+    {
+      "source": "2026-11-15 local vector_search.py and crash_recovery.py",
+      "output": "24 indexed exact TopK queries matched an independently sorted float32 reference. ANN average recall was 1.000 for that fixture. An equality bucket reflected an uncommitted update, was restored on rollback, and reflected a subsequent committed update and deletion. After two forced process exits, committed rows remained and uncommitted or failed rows were absent."
+    },
+    {
+      "source": "2026-11-15 public mysqltest manifest via a local Windows pipe adapter",
+      "output": "20/20 case assertions passed, including vector filters and ties, vector index maintenance, persistent restart, failed insert atomicity and shutdown rollback. The case assertions were the public ones. Docker and Linux resource limits were not exercised in this run."
+    },
+    {
+      "source": "Official round2 result screenshot provided by the student",
+      "output": "The first submission passed MySQL, E=372.812673, and its Agent Prompt result was invalid or under review per the platform message. The second reported MySQL pass, E=296.893996 and completed Agent Prompt raw score 0. The platform showed no breakdown of write/query time, I/O or memory. The student did not personally run tests."
+    },
+    {
+      "source": "Local tool execution, tests/benchmark_search.py, compared with 8abbdc10cf527979119df1532b99c970d9b50f86",
+      "output": "Three paired Windows runs, seeds 719–721, 10000 rows, 128 dimensions, 30 exact Top10 queries per group. Median previous→candidate milliseconds: high-cardinality equality 308.1→8.7, low-cardinality equality 67.8→62.0, unfiltered 1240.6→1231.1, primary key equality 2.5→2.7; durable writes 2885.3→2754.4. Log byte counts and result hashes agreed at every seed. Peak process resident memory was 73.15→73.98 MiB. This measures local process RSS and log size, not official cgroup memory or physical I/O."
+    },
+    {
+      "source": "Local tool execution, fallback and correctness checks",
+      "output": "Result hashes matched with 16500 rows beyond the auxiliary index size cap. 24 exact TopK results matched independent float32 ground truth. ANN recall was 1.000 on the local fixture. Unique and compound filters, rollback, committed changes, deletion, indexed restart, and two forced process exits passed."
     }
   ],
   "retrospective": {
