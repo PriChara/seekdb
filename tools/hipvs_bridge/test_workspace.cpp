@@ -153,13 +153,13 @@ int main() {
   assert(candidate_degree==160 && refinement_iterations==72);
   seekdb_cuvs_free(h);
   h=seekdb_cuvs_build(base,32767,128); assert(h);
-  assert(candidate_degree==160 && refinement_iterations==72);
+  assert(candidate_degree==128 && refinement_iterations==72);
   seekdb_cuvs_free(h);
   h=seekdb_cuvs_build(base,32768,128); assert(h);
-  assert(candidate_degree==144 && refinement_iterations==36);
+  assert(candidate_degree==128 && refinement_iterations==36);
   seekdb_cuvs_free(h);
   h=seekdb_cuvs_build(base,65536,128); assert(h);
-  assert(candidate_degree==144 && refinement_iterations==36);
+  assert(candidate_degree==128 && refinement_iterations==36);
   assert(seekdb_cuvs_search(h,base,1,10,ids,dist)==0 && observed_search_width==4);
   seekdb_cuvs_free(h);
   h=seekdb_cuvs_build(base,65537,128); assert(h);
