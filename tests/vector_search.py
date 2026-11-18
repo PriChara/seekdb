@@ -18,6 +18,26 @@ def f32(values):
     return struct.unpack(layout, struct.pack(layout, *values))
 
 
+def verify_ties_at_cutoff(db):
+    rows = [(key, [0.0] * 31 + [1.0 if key % 2 else -1.0])
+            for key in range(200, 0, -1)]
+    rows[0] = (200, [0.0] * 31 + [1.0000001192092896])
+    rows[1] = (199, [0.0] * 31 + [0.9999999403953552])
+    db.execute('CREATE TABLE ties (id BIGINT PRIMARY KEY, category BIGINT, vec VECTOR(32))', 'exact')
+    db.execute('INSERT INTO ties VALUES ' +
+               ','.join(f"({key},{key % 2},'{json.dumps(row)}')" for key, row in rows), 'exact')
+    db.execute('CREATE VECTOR INDEX ix ON ties(vec)', 'exact')
+    probe = [0.0] * 32
+    for category in (None, 0, 1):
+        where = '' if category is None else f' WHERE category = {category}'
+        order = f"ORDER BY L2_DISTANCE(vec, '{json.dumps(probe)}') LIMIT 10"
+        truth = sorted((math.dist(probe, row), key) for key, row in rows
+                       if category is None or key % 2 == category)[:10]
+        actual = db.execute(f'SELECT id FROM ties{where} {order}', 'exact')['rows']
+        assert actual == [[key] for _, key in truth], (category, actual, truth)
+    print('PASS: ordered ties and adjacent float32 radii at the TopK cutoff')
+
+
 def main():
     rng = random.Random(4312)
     vectors = [f32([rng.uniform(-2, 2) for _ in range(32)]) for _ in range(1024)]
@@ -98,6 +118,7 @@ def main():
             assert reopened.execute(prefix + order, 'exact')['rows'] == [[5]]
             assert reopened.execute(query, 'exact')['rows'] == []
             print('PASS: indexed equality filters return the same results after restart')
+            verify_ties_at_cutoff(reopened)
         finally:
             reopened.log.close()
 

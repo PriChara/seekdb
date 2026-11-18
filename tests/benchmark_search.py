@@ -45,7 +45,7 @@ def main():
     parser.add_argument('--rows', type=int, default=10_000)
     parser.add_argument('--queries', type=int, default=30)
     args = parser.parse_args()
-    namespace = {}
+    namespace = {'__file__': str(args.engine.resolve())}
     exec(compile(args.engine.read_bytes(), str(args.engine), 'exec'), namespace)
     rng = random.Random(args.seed)
 

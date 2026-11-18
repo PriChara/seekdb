@@ -1,11 +1,13 @@
 {
   "synthetic": false,
-  "scope": "MiniVectorDB 加赛初版和本轮 TopK 优化。区分学生原话、Agent 工作和工具测量。",
+  "scope": "MiniVectorDB 加赛开发证据。既有历史材料与 11 月 18 日的实验单独标注。",
   "context": {
     "branch": "2026-competition-round2",
     "starting_commit": "1a00042ab982464af149aeb40dc8dd5cd7c709ec",
     "implementation_commit": "87942f9801d9e07d7f8deec25088ff19a1bbff46",
-    "constraints_from_problem": "先通过全部正式 SQL 用例。精确 TopK 按 float32 存储值计算欧氏距离，先过滤后排序，距离并列按主键升序。事务内读到自己的修改，回滚后恢复，已确认提交经强杀后可恢复。默认性能负载有等量的无过滤和等值过滤查询。"
+    "constraints_from_problem": "先通过全部正式 SQL 用例。精确 TopK 按 float32 存储值计算欧氏距离，先过滤后排序，距离并列按主键升序。事务内读到自己的修改，回滚后恢复，已确认提交经强杀后可恢复。默认性能负载有等量的无过滤和等值过滤查询。",
+    "latest_baseline_commit": "08ac922b026a591708a15d67354afd01b0d00d9f",
+    "implementation_commit_scope": "该字段指向此前 TopK 优化版本；本轮优化源码与本文同一次提交。"
   },
   "conversations": [
     {
@@ -158,6 +160,170 @@
     "content": "本地单轮查询总耗时下降约 46%，其中等值过滤收益更大。该轮写入略慢，日志大小相同，所以目前证据只支持查询优化。正式性能依赖三轮测量以及 I/O 和峰值内存，仍需在 Linux 容器中预检。",
     "next_step_status": "等距 Top1 案例已有学生确认的计划和预测，以及 Agent 运行的结果。学生尚未提供自己的运行输出或复盘。"
   },
-  "limitations": "本轮实现、说明与实验由 Agent 执行。指南是用户提供的赛题来源。等距 Top1 的案例和预测经过 Agent 提示，尚无学生独立运行或结果解释。Windows SQL 层对照没有采集正式 cgroup I/O 或峰值内存，也未获得正式评测结果。",
-  "redaction": "仅保留与加赛实现和验证相关的文字，省略链接和登录信息。"
+  "limitations": "本轮实现、说明与实验由 Agent 执行。指南是用户提供的赛题来源。等距 Top1 的案例和预测经过 Agent 提示，尚无学生独立运行或结果解释。Windows SQL 层对照没有采集正式 cgroup I/O 或峰值内存，也未获得正式评测结果。 11 月 18 日的技术分析、代码和实测由 Agent 完成；没有将其记为学生亲自执行。",
+  "redaction": "仅保留与加赛实现和验证相关的文字，省略链接和登录信息。 本轮仅保留学生提出的参赛约束摘要；省略闲聊和原文。",
+  "student_decisions": [
+    {
+      "id": "rank-and-submit-budget",
+      "source": "本轮参赛者需求摘要，省略聊天原文",
+      "content": "学生指出加赛按排名换分，排名靠后可能归零；每天最多两次正式提测，要求先在本地充分验证再提交。其队友转述约 3000 的性能原始指标可能有排名分，目前没有可核对的榜单排名。",
+      "status": "参赛约束与计划，非学生亲自验证结果"
+    },
+    {
+      "id": "tie-prediction-provenance",
+      "source": "此前学生确认的等距案例与 Agent 的实际测试",
+      "student_evidence": "/conversations/9/content",
+      "result_evidence": "/experiments/6/output",
+      "content": "运行前预测说明了这组输入如何区分插入顺序与主键顺序。该案例及预测措辞此前经过 Agent 提示，运行由 Agent 完成。"
+    }
+  ],
+  "iterations_2026_11_18": [
+    {
+      "id": "exact-shortlist",
+      "source": "Agent 的设计，程序输出来自 tests/vector_search.py",
+      "analysis": "Python 热路径每个候选都会创建一段视图并执行一次 math.dist。改用 C 连续扫描 float32 行，在支持 AVX2/FMA 的 CPU 上向量化，其他 CPU 保留标量实现。两种路径使用 double 累加。直接用近似平方距离决定最终顺序有舍入风险。先用大小为 K 的堆找临界值，再保留临界误差范围内的全部位置，由 math.dist 和主键重新确定最终顺序。",
+      "verification": "用 200 条以反向主键顺序插入的 32 维数据覆盖相同半径、临界值两侧相邻 float32 半径、无过滤以及两组等值过滤。标准答案用独立的 (math.dist, key) 全排序生成。",
+      "output": "PASS: ordered ties and adjacent float32 radii at the TopK cutoff. 24 independent TopK results matched; ANN recall=1.000 on the local fixture."
+    },
+    {
+      "id": "durable-float32-log",
+      "source": "Agent 的实现和 tests/crash_recovery.py 实际输出",
+      "analysis": "旧日志把已舍入到 float32 的值再次展开为十进制文本，重复编码产生大量 I/O。新日志将向量存成小端 float32 字节，再放进有明确标记的 Base64 字段。保留 JSON 行边界与旧向量数组读取。提交仍先写入提交标记并 fsync，再确认成功；换日志编码不应改变事务边界。",
+      "verification": "在同一事务中提交整数行和向量行，在下一事务修改两者并强杀进程。恢复后检查旧向量 [0.5,-0.25] 和旧整数，第二次强杀前再测试失败语句的原子性。",
+      "output": "PASS: two process kills, committed rows recovered, uncommitted and failed rows absent."
+    },
+    {
+      "id": "projection-readback-ablation",
+      "source": "Agent 在同一台机器上使用同一组 Docker 测试负载，逐次加入投影优化",
+      "analysis": "原生扫描缩短距离计算后，每次 TopK 仍会把命中行从日志解码并保留在行缓存。投影只涉及主键与向量时，已有精确浮点值足够构造结果；若投影需要其他列，继续从持久化记录读取。",
+      "output": "加入投影优化前，三个配对轮次的候选查询容器峰值为 56266752、55705600、56639488 bytes。加入投影优化并优化向量输入打包后，对应峰值为 30859264、30474240、30846976 bytes。三轮查询结果摘要与此前结果及各自基线均一致。此对比涉及两个变更，不能将所有量化收益单独归于其中一个。"
+    },
+    {
+      "id": "container-matched-comparison",
+      "source": "Agent 执行三轮本地协议对照；同一轮输入在基线与候选间复用",
+      "verification": "每轮独立数据卷和容器；两核、2 GiB，无网络，只读根文件系统；100 次事务每次提交 100 条，查询 500 条带普通列等值过滤与 500 条无过滤，查询为 128 维精确 Top10。固定随机种子 719、720、721，轮次交替换序。比较完整查询结果及重启后数据摘要。",
+      "output": "三轮中位数，基线 → 候选。写入 2903.15 → 2078.48 ms，有过滤查询 1218.43 → 492.24 ms，无过滤查询 10021.83 → 608.95 ms。查询阶段 cgroup I/O 24.77 → 7.25 MiB，容器峰值内存 97.66 → 29.42 MiB。三轮均有相同查询结果哈希；重启后 10000 个 ID 全部一致，按 ID 每隔 97 行采样的完整行哈希一致。最终镜像通过公开题包 20/20 用例。",
+      "round_metrics": {
+        "base": [
+          {
+            "round": 1,
+            "image": "base",
+            "write_ms": 2922.0812999999453,
+            "write_resources": {
+              "log_bytes": 25555483,
+              "cgroup_peak_bytes": 43945984,
+              "cgroup_io_bytes": 25968640
+            },
+            "recovered_sha256": "5713d24c5a27cb622180fdd6bd467a6dd283da0dcb9b9b08593e5fd5793f91bd",
+            "filtered_ms": 1437.5053999999636,
+            "unfiltered_ms": 9853.5124,
+            "queries_sha256": "d699d4649e17eb9335b5eb55c5018e544425ac93535e85482ac0ab02bd285799",
+            "query_resources": {
+              "log_bytes": 25555597,
+              "cgroup_peak_bytes": 103452672,
+              "cgroup_io_bytes": 25972736
+            }
+          },
+          {
+            "round": 2,
+            "image": "base",
+            "write_ms": 2864.2741000001024,
+            "write_resources": {
+              "log_bytes": 25556171,
+              "cgroup_peak_bytes": 43593728,
+              "cgroup_io_bytes": 25968640
+            },
+            "recovered_sha256": "0ea86354ea19259bd259a4be7e565e0e98bce074f685d08a1db14e2e957c7b23",
+            "filtered_ms": 1218.4320000001208,
+            "unfiltered_ms": 10021.828400000004,
+            "queries_sha256": "9a8f9af6739df2a538a5095eb9d56172064cb9e35dd2ea05273d20debe5be124",
+            "query_resources": {
+              "log_bytes": 25556285,
+              "cgroup_peak_bytes": 101961728,
+              "cgroup_io_bytes": 25972736
+            }
+          },
+          {
+            "round": 3,
+            "image": "base",
+            "write_ms": 2903.153100000054,
+            "write_resources": {
+              "log_bytes": 25556545,
+              "cgroup_peak_bytes": 43491328,
+              "cgroup_io_bytes": 25968640
+            },
+            "recovered_sha256": "3b1474633148a19a1c13b6906c11571ff012874b649d0c45b16ec7290d8cc9ba",
+            "filtered_ms": 1183.2828999999947,
+            "unfiltered_ms": 10655.120099999976,
+            "queries_sha256": "179613592ebb354351abb3e5f4f5c79db75953841dfc75ad57b42ff94e80977c",
+            "query_resources": {
+              "log_bytes": 25556659,
+              "cgroup_peak_bytes": 102408192,
+              "cgroup_io_bytes": 25972736
+            }
+          }
+        ],
+        "candidate": [
+          {
+            "round": 1,
+            "image": "candidate",
+            "write_ms": 2078.4828999999263,
+            "write_resources": {
+              "log_bytes": 7182131,
+              "cgroup_peak_bytes": 25604096,
+              "cgroup_io_bytes": 7593984
+            },
+            "recovered_sha256": "5713d24c5a27cb622180fdd6bd467a6dd283da0dcb9b9b08593e5fd5793f91bd",
+            "filtered_ms": 492.24389999994855,
+            "unfiltered_ms": 608.945500000118,
+            "queries_sha256": "d699d4649e17eb9335b5eb55c5018e544425ac93535e85482ac0ab02bd285799",
+            "query_resources": {
+              "log_bytes": 7182245,
+              "cgroup_peak_bytes": 30859264,
+              "cgroup_io_bytes": 7598080
+            }
+          },
+          {
+            "round": 2,
+            "image": "candidate",
+            "write_ms": 2050.315099999807,
+            "write_resources": {
+              "log_bytes": 7182131,
+              "cgroup_peak_bytes": 26025984,
+              "cgroup_io_bytes": 7593984
+            },
+            "recovered_sha256": "0ea86354ea19259bd259a4be7e565e0e98bce074f685d08a1db14e2e957c7b23",
+            "filtered_ms": 478.8690999998835,
+            "unfiltered_ms": 540.0175999998282,
+            "queries_sha256": "9a8f9af6739df2a538a5095eb9d56172064cb9e35dd2ea05273d20debe5be124",
+            "query_resources": {
+              "log_bytes": 7182245,
+              "cgroup_peak_bytes": 30474240,
+              "cgroup_io_bytes": 7598080
+            }
+          },
+          {
+            "round": 3,
+            "image": "candidate",
+            "write_ms": 2135.867999999846,
+            "write_resources": {
+              "log_bytes": 7182131,
+              "cgroup_peak_bytes": 25722880,
+              "cgroup_io_bytes": 7593984
+            },
+            "recovered_sha256": "3b1474633148a19a1c13b6906c11571ff012874b649d0c45b16ec7290d8cc9ba",
+            "filtered_ms": 599.4390000000749,
+            "unfiltered_ms": 732.7242000001206,
+            "queries_sha256": "179613592ebb354351abb3e5f4f5c79db75953841dfc75ad57b42ff94e80977c",
+            "query_resources": {
+              "log_bytes": 7182245,
+              "cgroup_peak_bytes": 30846976,
+              "cgroup_io_bytes": 7598080
+            }
+          }
+        ]
+      },
+      "limitations": "本地 Docker Desktop 环境的 cgroup 数据汇总了所见设备，未模拟正式专用数据设备和测量基线。不能由此换算线上 E 或排名。"
+    }
+  ]
 }

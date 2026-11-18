@@ -1,8 +1,10 @@
 """Single-client SQL and vector execution over a disk-backed transaction log."""
 
+import base64
 import bisect
 from array import array
 from collections import OrderedDict
+import ctypes
 import heapq
 from itertools import islice
 import json
@@ -13,6 +15,45 @@ from pathlib import Path
 import re
 import struct
 import sys
+
+
+def load_vector_scan():
+    if sys.platform != 'linux':
+        return None
+    path = Path(__file__).with_name('vector_scan.so')
+    if not path.is_file():
+        return None
+    scan = ctypes.CDLL(str(path.resolve())).vector_shortlist
+    scan.argtypes = (
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p,
+        ctypes.c_size_t, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_void_p,
+        ctypes.c_void_p,
+    )
+    scan.restype = ctypes.c_size_t
+    return scan
+
+
+VECTOR_SCAN = load_vector_scan() if '__file__' in globals() else None
+
+
+def vector_shortlist(values, probe, positions, count, limit):
+    if VECTOR_SCAN is None or len(probe) < 16 or count < 64 or limit >= count:
+        return positions
+    query = (ctypes.c_double * len(probe))(*probe)
+    vectors = (ctypes.c_float * len(values)).from_buffer(values)
+    selected = None
+    if not isinstance(positions, range):
+        offsets = positions if isinstance(positions, array) else array('I', positions)
+        count = len(offsets)
+        if count < 64 or count <= limit:
+            return offsets
+        selected = (ctypes.c_uint32 * count).from_buffer(offsets)
+    distances = (ctypes.c_double * count)()
+    heap = (ctypes.c_double * limit)()
+    candidates = (ctypes.c_uint32 * count)()
+    size = VECTOR_SCAN(vectors, query, len(probe), selected, count, limit,
+                       distances, heap, candidates)
+    return islice(candidates, size)
 
 
 class SQLError(Exception):
@@ -28,6 +69,25 @@ def require(condition, message, code='invalid_argument'):
 
 def encode(value):
     return json.dumps(value, ensure_ascii=True, allow_nan=False, separators=(',', ':'))
+
+
+def encode_row(row):
+    stored = []
+    for cell in row:
+        if isinstance(cell, list):
+            cell = struct.pack(f'<{len(cell)}f', *cell)
+        if isinstance(cell, bytes):
+            cell = {'f32': base64.b64encode(cell).decode('ascii')}
+        stored.append(cell)
+    return stored
+
+
+def decode_row(row):
+    for i, cell in enumerate(row):
+        if isinstance(cell, dict):
+            raw = base64.b64decode(cell['f32'])
+            row[i] = list(struct.unpack(f'<{len(raw) // 4}f', raw))
+    return row
 
 
 class Log:
@@ -97,7 +157,8 @@ class Log:
         try:
             for key, value in rows:
                 offset = self.writer.tell()
-                self.writer.write((encode((table, key, value)) + '\n').encode('utf-8'))
+                stored = encode_row(value) if isinstance(value, list) else value
+                self.writer.write((encode((table, key, stored)) + '\n').encode('utf-8'))
                 changes[key] = offset if value is not None else None
         except (SQLError, ValueError):
             self.writer.seek(start)
@@ -121,13 +182,15 @@ class Log:
     def offset(self, table, key):
         return self.pending.get(table, {}).get(key, self.tables.get(table, {}).get(key))
 
-    def read(self, offset):
+    def read(self, offset, cache=True):
         if offset in self.row_cache:
             self.row_cache.move_to_end(offset)
             return self.row_cache[offset][0]
         self.reader.seek(offset)
         value = json.loads(self.reader.readline())[2]
         if isinstance(value, list):
+            decode_row(value)
+        if cache and isinstance(value, list):
             # Bound the cache by the decoded size, including vector elements.
             size = 160 + sys.getsizeof(value) + sum(sys.getsizeof(cell) for cell in value)
             size += sum(sum(map(sys.getsizeof, cell)) for cell in value if isinstance(cell, list))
@@ -140,19 +203,19 @@ class Log:
                 self.cache_bytes += size
         return value
 
-    def rows(self, table, key=None):
+    def rows(self, table, key=None, *, cache=True):
         if key is not None:
             offset = self.offset(table, key)
             if offset is not None:
-                yield key, self.read(offset)
+                yield key, self.read(offset, cache)
             return
         pending = self.pending.get(table, {})
         for primary, offset in self.tables.get(table, {}).items():
             if primary is not None and primary not in pending:
-                yield primary, self.read(offset)
+                yield primary, self.read(offset, cache)
         for primary, offset in pending.items():
             if primary is not None and offset is not None:
-                yield primary, self.read(offset)
+                yield primary, self.read(offset, cache)
 
     def close(self):
         self.rollback()
@@ -160,7 +223,7 @@ class Log:
         self.writer.close()
 
 
-TOKEN = re.compile(r"\s+|[A-Za-z_][A-Za-z_0-9]*|`(?:``|[^`])+`|'(?:''|[^'])*'|[+-]?\d+|<=|>=|[=<>(),;*]", re.ASCII)
+TOKEN = re.compile(r"\s+|[A-Za-z_][A-Za-z_0-9]*|`(?:``|[^`]++)+`|'(?:''|[^']++)*'|[+-]?\d+|<=|>=|[=<>(),;*]", re.ASCII)
 IDENTIFIER = re.compile(r'[a-z_][a-z_0-9]*', re.ASCII)
 INTEGER = re.compile(r'[+-]?\d+', re.ASCII)
 COMPARE = {'=': operator.eq, '<': operator.lt, '<=': operator.le, '>': operator.gt, '>=': operator.ge}
@@ -213,15 +276,17 @@ class Tokens:
         require(not self.peek(), 'Unexpected SQL suffix', 'syntax_error')
 
 
-def vector(value, dimension):
+def vector(value, dimension, *, packed=False):
     try:
         parts = json.loads(value)
         if not isinstance(parts, list) or len(parts) != dimension or any(type(x) not in (float, int) for x in parts):
             raise ValueError()
-        converted = list(struct.unpack(f'<{dimension}f', struct.pack(f'<{dimension}f', *parts)))
+        layout = f'<{dimension}f'
+        encoded = struct.pack(layout, *parts)
+        converted = struct.unpack(layout, encoded)
         if not all(map(math.isfinite, converted)):
             raise ValueError()
-        return converted
+        return encoded if packed else converted
     except (ValueError, TypeError, OverflowError, struct.error, RecursionError):
         raise SQLError('invalid_vector', 'Expected a fixed-length finite float32 vector') from None
 
@@ -233,7 +298,7 @@ def validate(value, column):
     elif kind == 'varchar':
         require(isinstance(value, str) and len(value) <= size, 'VARCHAR value exceeds its Unicode length')
     else:
-        value = vector(value, size)
+        value = vector(value, size, packed=True)
     return value
 
 
@@ -264,7 +329,7 @@ class Database:
                 return None
             self.indexes.clear()
             column = next(i for i, c in enumerate(schema['columns']) if c[1] == 'vector')
-            entries = sorted((row[column][0], key) for key, row in self.log.rows(table))
+            entries = sorted((row[column][0], key) for key, row in self.log.rows(table, cache=False))
             self.indexes[table] = (entries, {})
         return self.indexes[table]
 
@@ -534,7 +599,13 @@ class Database:
                 column = self.column(schema, rank_expr[0])
                 probe = vector(rank_expr[1], schema['columns'][column][2])
                 if not conditions or (len(conditions) == 1 and conditions[0][1] == '='):
-                    source = self.vector_topk(name, column, probe, limit, conditions)
+                    key = schema['key']
+                    key_name = schema['columns'][key][0]
+                    vector_name = schema['columns'][column][0]
+                    covered = all(expr[0] in (key_name, vector_name) for expr in projections)
+                    project_vector = any(expr[0] == vector_name for expr in projections)
+                    source = self.vector_topk(name, column, probe, limit, conditions,
+                                              key if covered else None, project_vector)
                 else:
                     source = self.indexed_topk(name, schema, conditions, probe, order_value, limit, mode)
             elif descending:
@@ -547,7 +618,7 @@ class Database:
             source = islice(source, limit)
         return {'columns': output, 'rows': [[value(row) for value in projectors] for _, row in source]}
 
-    def vector_topk(self, name, column, probe, limit, conditions):
+    def vector_topk(self, name, column, probe, limit, conditions, covered_key, project_vector):
         if limit == 0:
             return []
         dimension = len(probe)
@@ -559,7 +630,7 @@ class Database:
             if self.row_count_upper_bound(name) <= row_capacity:
                 self.vector_cache = None
                 self.filter_cache = None
-                for key, row in self.log.rows(name):
+                for key, row in self.log.rows(name, cache=False):
                     keys.append(key)
                     values.extend(row[column])
                 self.vector_cache = (name, keys, values)
@@ -574,26 +645,45 @@ class Database:
         if conditions:
             filter_column, _, target = conditions[0]
             if self.filter_cache is None or self.filter_cache[0] != filter_column:
-                labels = []
+                buckets = {}
                 remaining = self.FILTER_CACHE_BYTES
-                for _, row in self.log.rows(name):
+                for i, (_, row) in enumerate(self.log.rows(name, cache=False)):
                     value = row[filter_column]
-                    remaining -= sys.getsizeof(value) + 16
+                    bucket = buckets.get(value)
+                    if bucket is None:
+                        buckets[value] = i
+                        remaining -= sys.getsizeof(value) + 120
+                    elif isinstance(bucket, int):
+                        buckets[value] = array('I', (bucket, i))
+                        remaining -= 100
+                    else:
+                        bucket.append(i)
+                        remaining -= 5
                     if remaining < 0:
-                        labels = None
+                        buckets = None
                         break
-                    labels.append(value)
-                self.filter_cache = (filter_column, labels)
-            labels = self.filter_cache[1]
-            if labels is None:
+                self.filter_cache = (filter_column, buckets)
+            buckets = self.filter_cache[1]
+            if buckets is None:
                 positions = (i for i, key in enumerate(keys)
                              if self.log.read(self.log.offset(name, key))[filter_column] == target)
             else:
-                positions = (i for i, value in enumerate(labels) if value == target)
-        ranks = ((math.dist(vectors[i * dimension:(i + 1) * dimension], probe), keys[i])
+                bucket = buckets.get(target, ())
+                positions = (bucket,) if isinstance(bucket, int) else bucket
+        positions = vector_shortlist(values, probe, positions, len(keys), limit)
+        ranks = ((math.dist(vectors[i * dimension:(i + 1) * dimension], probe), keys[i], i)
                  for i in positions)
-        return [(key, self.log.read(self.log.offset(name, key)))
-                for _, key in heapq.nsmallest(limit, ranks)]
+        best = heapq.nsmallest(limit, ranks)
+        if covered_key is None:
+            return [(key, self.log.read(self.log.offset(name, key))) for _, key, _ in best]
+        result = []
+        for _, key, i in best:
+            row = [None] * (max(covered_key, column) + 1)
+            row[covered_key] = key
+            if project_vector:
+                row[column] = vectors[i * dimension:(i + 1) * dimension].tolist()
+            result.append((key, row))
+        return result
 
     def indexed_topk(self, name, schema, conditions, probe, distance, limit, mode):
         if limit == 0:

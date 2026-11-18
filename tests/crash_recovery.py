@@ -29,15 +29,18 @@ def request(process, sql=None):
 def main():
     with tempfile.TemporaryDirectory() as directory:
         first = start(directory)
-        for sql in ('CREATE TABLE docs (id BIGINT PRIMARY KEY, value BIGINT)', 'BEGIN',
-                    'INSERT INTO docs VALUES (1, 10)', 'COMMIT', 'BEGIN',
-                    'UPDATE docs SET value = 99 WHERE id = 1', 'INSERT INTO docs VALUES (2, 20)'):
+        for sql in ('CREATE TABLE docs (id BIGINT PRIMARY KEY, value BIGINT)',
+                    'CREATE TABLE v (id BIGINT PRIMARY KEY, vec VECTOR(2))', 'BEGIN',
+                    'INSERT INTO docs VALUES (1, 10)', "INSERT INTO v VALUES (1, '[0.5, -0.25]')",
+                    'COMMIT', 'BEGIN', 'UPDATE docs SET value = 99 WHERE id = 1',
+                    'INSERT INTO docs VALUES (2, 20)', "UPDATE v SET vec = '[0, 0]' WHERE id = 1"):
             assert request(first, sql)['ok'], sql
         first.kill()
         first.communicate(timeout=5)
 
         second = start(directory)
         assert request(second, 'SELECT * FROM docs ORDER BY id')['rows'] == [[1, 10]]
+        assert request(second, 'SELECT * FROM v')['rows'] == [[1, [0.5, -0.25]]]
         assert request(second, 'BEGIN')['ok']
         assert not request(second, 'INSERT INTO docs VALUES (3, 30), (1, 999)')['ok']
         assert request(second, 'INSERT INTO docs VALUES (2, 22)')['ok']
